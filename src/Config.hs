@@ -27,6 +27,7 @@ data KrokiConfig = KrokiConfig
   , cfgBatchSize :: Maybe Int
   , cfgRequeueAfter :: Maybe Int
   , cfgAudioPlayer :: Maybe String
+  , cfgAudioAutoplay :: Maybe Bool
   } deriving (Show, Eq)
 
 -- Loads ~/.config/kroki/config (via XDG)
@@ -44,6 +45,7 @@ parseConfig s =
     , cfgBatchSize    = lookupInt "batch_size"   ls
     , cfgRequeueAfter = lookupInt "requeue_after" ls
     , cfgAudioPlayer  = lookupKey "audio_player" ls
+    , cfgAudioAutoplay = lookupBool "audio_autoplay" ls
     }
   where ls = lines s
 
@@ -93,13 +95,17 @@ writeConfigInteractive dir path existing = do
   batchSize  <- prompt "Batch size (0 = all available)" (Just (maybe (show defaultBatchSize)  show (cfgBatchSize existing)))
   requeueAft <- prompt "Requeue after (positions)" (Just (maybe (show defaultRequeueAfter) show (cfgRequeueAfter existing)))
   audioPlay  <- prompt "Audio player command (leave empty to disable)" (cfgAudioPlayer existing)
+  autoplay   <- prompt "Auto-play reading audio on first appearance of a vocab reading question? [y/N]"
+                  (Just (if cfgAudioAutoplay existing == Just True then "y" else "n"))
 
   let lineFor key val = key <> "=" <> val
+      autoplayOn = map toLower autoplay `elem` ["y", "yes"]
       content = unlines $ concat
         [ [lineFor "token"        token]
         , [lineFor "batch_size"    batchSize  | not (null batchSize)]
         , [lineFor "requeue_after" requeueAft | not (null requeueAft)]
         , [lineFor "audio_player"  audioPlay  | not (null audioPlay)]
+        , [lineFor "audio_autoplay" "true"    | autoplayOn]
         ]
 
   createDirectoryIfMissing True dir
@@ -125,3 +131,10 @@ lookupInt key ls =
                  [(n, "")] -> Just n
                  _         -> Nothing
     Nothing -> Nothing
+
+lookupBool :: String -> [String] -> Maybe Bool
+lookupBool key ls =
+  case map toLower <$> lookupKey key ls of
+    Just v | v `elem` ["true", "1", "yes"] -> Just True
+           | v `elem` ["false", "0", "no"] -> Just False
+    _ -> Nothing

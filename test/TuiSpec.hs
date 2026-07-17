@@ -4,6 +4,7 @@ module TuiSpec (spec) where
 
 import Test.Hspec
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import qualified Data.Vector as Vec
 import qualified Brick.Widgets.List as L
 import Data.Time (UTCTime(..), fromGregorian, secondsToDiffTime)
@@ -103,6 +104,9 @@ stateWith prog subjToAsg = Tui.AppState
   , Tui.stTZ            = utc
   , Tui.stSubmitChan    = error "stSubmitChan: not used in pure tests"
   , Tui.stLastCompleted = Nothing
+  , Tui.stPriorWrong    = M.empty
+  , Tui.stAudioAutoplay = False
+  , Tui.stAutoplayed    = S.empty
   }
 
 --------------------------------------------------------------------------------
@@ -131,6 +135,7 @@ spec = do
       it "organise → organize"      $ Tui.normMeaning "organise"     `shouldBe` "organize"
       it "organisation → organization" $ Tui.normMeaning "organisation" `shouldBe` "organization"
       it "catalogue → catalog"      $ Tui.normMeaning "catalogue"    `shouldBe` "catalog"
+      it "neighbourhood → neighborhood" $ Tui.normMeaning "neighbourhood" `shouldBe` "neighborhood"
       it "four unchanged"           $ Tui.normMeaning "four"         `shouldBe` "four"
       it "rise unchanged"           $ Tui.normMeaning "rise"         `shouldBe` "rise"
       it "surprise unchanged"       $ Tui.normMeaning "surprise"     `shouldBe` "surprise"
@@ -337,3 +342,58 @@ spec = do
           [sub] = Tui.mkSubmissions (stateWith prog subjToAsg)
       Tui.subWrongMeaning sub `shouldBe` 0
       Tui.subWrongReading sub `shouldBe` 0
+
+  describe "sessionWrongCounts" $ do
+    it "omits subjects with zero wrong counts" $ do
+      let prog = M.singleton (sid 1) (Tui.initProgress kanjiSubj)
+      Tui.sessionWrongCounts (stateWith prog M.empty) `shouldBe` []
+
+    it "includes subjects missed at least once, with their counts" $ do
+      let prog = M.singleton (sid 1)
+            (Tui.initProgress kanjiSubj) { Tui.pMeaningWrong = 2, Tui.pReadingWrong = 1 }
+      Tui.sessionWrongCounts (stateWith prog M.empty) `shouldBe` [(sid 1, 2, 1)]
+
+    it "includes a subject missed on only one axis" $ do
+      let prog = M.singleton (sid 1)
+            (Tui.initProgress kanjiSubj) { Tui.pMeaningWrong = 0, Tui.pReadingWrong = 3 }
+      Tui.sessionWrongCounts (stateWith prog M.empty) `shouldBe` [(sid 1, 0, 3)]
+
+  describe "missedBeforeLabel" $ do
+    it "is Nothing when never missed" $
+      Tui.missedBeforeLabel (0, 0) `shouldBe` Nothing
+    it "shows meaning-only misses" $
+      Tui.missedBeforeLabel (2, 0) `shouldBe` Just "meaning ×2"
+    it "shows reading-only misses" $
+      Tui.missedBeforeLabel (0, 5) `shouldBe` Just "reading ×5"
+    it "shows both when both are non-zero" $
+      Tui.missedBeforeLabel (1, 1) `shouldBe` Just "meaning ×1, reading ×1"
+
+  describe "shouldAutoplay / markAutoplayed" $ do
+    let vocabWithAudio = vocabSubj { Api.subjAudioUrls = ["https://example.com/a.mp3"] }
+        readingQ = mkQ vocabWithAudio Tui.QReading
+        meaningQ = mkQ vocabWithAudio Tui.QMeaning
+        autoplayReady = (stateWith M.empty M.empty)
+          { Tui.stAudioAutoplay = True
+          , Tui.stAudioPlayer   = Just "mpv --really-quiet"
+          }
+
+    it "is False when autoplay is disabled" $
+      Tui.shouldAutoplay autoplayReady { Tui.stAudioAutoplay = False } readingQ
+        `shouldBe` False
+
+    it "is True for a fresh vocab reading question with audio configured" $
+      Tui.shouldAutoplay autoplayReady readingQ `shouldBe` True
+
+    it "is False for a meaning question" $
+      Tui.shouldAutoplay autoplayReady meaningQ `shouldBe` False
+
+    it "is False for a kanji reading question" $
+      Tui.shouldAutoplay autoplayReady (mkQ kanjiSubj Tui.QReading) `shouldBe` False
+
+    it "is False without an audio player configured" $
+      Tui.shouldAutoplay autoplayReady { Tui.stAudioPlayer = Nothing } readingQ
+        `shouldBe` False
+
+    it "is False once already marked auto-played" $
+      let st' = Tui.markAutoplayed readingQ autoplayReady
+      in Tui.shouldAutoplay st' readingQ `shouldBe` False

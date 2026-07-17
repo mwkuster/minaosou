@@ -3,6 +3,7 @@ module Main (main) where
 import qualified Cli
 import qualified Api
 import qualified Config
+import qualified History
 import qualified Tui
 import Util (strPadLeft, strPadRight)
 
@@ -81,6 +82,7 @@ main = do
           rqAfter =
             fromMaybe Config.defaultRequeueAfter
               (Cli.studyRequeueAfter studyOpts <|> Config.cfgRequeueAfter cfg)
+          audioAutoplay = fromMaybe False (Config.cfgAudioAutoplay cfg)
           raw = fromMaybe 10 batchSize
           n   = if raw == 0 then maxBound else raw
       now  <- getCurrentTime
@@ -127,7 +129,14 @@ main = do
                       now' <- getCurrentTime
                       summary' <- Api.getSummary t
                       pure (now', summary')
-                wantsMore <- Tui.runStudyTui rqAfter audioPlayer user summary now tz allSubjMap subjToAsg subjects refreshSummary (submitBatch asgToInfo)
+                history <- History.loadHistory
+                let priorWrong = History.historyCounts history
+                (wantsMore, sessionCounts) <-
+                  Tui.runStudyTui rqAfter audioPlayer audioAutoplay user summary now tz
+                                  allSubjMap subjToAsg priorWrong subjects
+                                  refreshSummary (submitBatch asgToInfo)
+                now3 <- getCurrentTime
+                History.saveHistory (History.mergeSession now3 sessionCounts history)
                 if wantsMore then runBatch else pure ()
 
           submitBatch asgToInfo subs = do

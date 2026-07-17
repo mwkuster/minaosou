@@ -28,7 +28,7 @@ module Api
   ) where
 
 import Control.Exception (Exception)
-import Data.Aeson (FromJSON(..), (.:), (.:?), Object, withObject)
+import Data.Aeson (FromJSON(..), ToJSON(..), (.:), (.:?), Object, withObject)
 import Data.Aeson.Types (Parser)
 import qualified Data.Aeson.Key as Key
 import Data.Aeson (object, (.=))
@@ -57,6 +57,8 @@ newtype AssignmentId = AssignmentId { unAssignmentId :: Int }
 
 instance Show SubjectId    where show (SubjectId i)    = show i
 instance Show AssignmentId where show (AssignmentId i) = show i
+
+instance ToJSON SubjectId      where toJSON (SubjectId i)        = toJSON i
 
 instance FromJSON SubjectId    where parseJSON v = SubjectId    <$> parseJSON v
 instance FromJSON AssignmentId where parseJSON v = AssignmentId <$> parseJSON v

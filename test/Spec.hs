@@ -3,11 +3,14 @@
 module Main (main) where
 
 import Test.Hspec
-import Data.Aeson (decode)
+import Data.Aeson (decode, encode)
 import Data.ByteString.Lazy (ByteString)
+import qualified Data.Map.Strict as M
+import Data.Time (UTCTime(..), fromGregorian, secondsToDiffTime)
 import qualified Romaji
 import qualified TuiSpec
 import qualified Config
+import qualified History
 import qualified Api
 
 main :: IO ()
@@ -15,6 +18,7 @@ main = hspec $ do
   TuiSpec.spec
   configSpec
   apiSpec
+  historySpec
 
   describe "romajiToHiragana" $ do
 
@@ -154,6 +158,24 @@ configSpec = describe "parseConfig" $ do
   it "defaultRequeueAfter is 7" $
     Config.defaultRequeueAfter `shouldBe` 7
 
+  describe "audio_autoplay" $ do
+    it "parses true" $
+      Config.cfgAudioAutoplay (Config.parseConfig "audio_autoplay=true") `shouldBe` Just True
+    it "parses false" $
+      Config.cfgAudioAutoplay (Config.parseConfig "audio_autoplay=false") `shouldBe` Just False
+    it "parses yes/no" $ do
+      Config.cfgAudioAutoplay (Config.parseConfig "audio_autoplay=yes") `shouldBe` Just True
+      Config.cfgAudioAutoplay (Config.parseConfig "audio_autoplay=no")  `shouldBe` Just False
+    it "parses 1/0" $ do
+      Config.cfgAudioAutoplay (Config.parseConfig "audio_autoplay=1") `shouldBe` Just True
+      Config.cfgAudioAutoplay (Config.parseConfig "audio_autoplay=0") `shouldBe` Just False
+    it "is case-insensitive" $
+      Config.cfgAudioAutoplay (Config.parseConfig "audio_autoplay=TRUE") `shouldBe` Just True
+    it "is Nothing when absent" $
+      Config.cfgAudioAutoplay (Config.parseConfig "") `shouldBe` Nothing
+    it "is Nothing for an unrecognized value" $
+      Config.cfgAudioAutoplay (Config.parseConfig "audio_autoplay=maybe") `shouldBe` Nothing
+
 --------------------------------------------------------------------------------
 -- API JSON parsing tests
 --------------------------------------------------------------------------------
@@ -250,3 +272,57 @@ apiSpec = describe "Api JSON parsing" $ do
     it "fails to parse unknown object type" $
       (decode "{\"id\":1,\"object\":\"unknown\",\"data\":{}}" :: Maybe Api.Subject)
         `shouldBe` Nothing
+
+--------------------------------------------------------------------------------
+-- Cross-session leech history tests
+--------------------------------------------------------------------------------
+
+historySpec :: Spec
+historySpec = describe "History" $ do
+
+  let t1 = UTCTime (fromGregorian 2026 7 1) (secondsToDiffTime 0)
+      t2 = UTCTime (fromGregorian 2026 7 17) (secondsToDiffTime 0)
+
+  describe "LeechEntry JSON" $ do
+    let entry = History.LeechEntry
+          { History.leSubjectId    = Api.SubjectId 42
+          , History.leWrongMeaning = 2
+          , History.leWrongReading = 1
+          , History.leLastSeen     = t1
+          }
+
+    it "round-trips through encode/decode" $
+      (decode (encode entry) :: Maybe History.LeechEntry) `shouldBe` Just entry
+
+    it "decodes a fixed JSON object" $ do
+      let json :: ByteString
+          json = "{\"subject_id\":42,\"wrong_meaning\":2,\"wrong_reading\":1,\"last_seen\":\"2026-07-01T00:00:00Z\"}"
+      fmap History.leSubjectId (decode json) `shouldBe` Just (Api.SubjectId 42)
+      fmap History.leWrongMeaning (decode json) `shouldBe` Just 2
+      fmap History.leWrongReading (decode json) `shouldBe` Just 1
+
+  describe "mergeSession" $ do
+    it "adds a new entry for a subject missed for the first time" $ do
+      let merged = History.mergeSession t1 [(Api.SubjectId 1, 2, 0)] M.empty
+      History.historyCounts merged `shouldBe` M.singleton (Api.SubjectId 1) (2, 0)
+
+    it "accumulates counts across repeated merges for the same subject" $ do
+      let after1 = History.mergeSession t1 [(Api.SubjectId 1, 1, 1)] M.empty
+          after2 = History.mergeSession t2 [(Api.SubjectId 1, 2, 0)] after1
+      History.historyCounts after2 `shouldBe` M.singleton (Api.SubjectId 1) (3, 1)
+
+    it "bumps last_seen to the latest merge" $ do
+      let after1 = History.mergeSession t1 [(Api.SubjectId 1, 1, 0)] M.empty
+          after2 = History.mergeSession t2 [(Api.SubjectId 1, 1, 0)] after1
+      fmap History.leLastSeen (M.lookup (Api.SubjectId 1) after2) `shouldBe` Just t2
+
+    it "leaves untouched entries alone" $ do
+      let existing = History.mergeSession t1 [(Api.SubjectId 1, 1, 0)] M.empty
+          merged   = History.mergeSession t2 [(Api.SubjectId 2, 5, 0)] existing
+      History.historyCounts merged `shouldBe` M.fromList
+        [ (Api.SubjectId 1, (1, 0)), (Api.SubjectId 2, (5, 0)) ]
+
+  describe "historyCounts" $
+    it "projects to (meaning, reading) pairs" $ do
+      let merged = History.mergeSession t1 [(Api.SubjectId 1, 3, 4)] M.empty
+      History.historyCounts merged `shouldBe` M.singleton (Api.SubjectId 1) (3, 4)

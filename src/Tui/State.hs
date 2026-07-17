@@ -28,6 +28,7 @@ module Tui.State
   , markOk
   , incWrong
   , mkSubmissions
+  , sessionWrongCounts
   , initProgress
 
     -- Setup
@@ -46,6 +47,9 @@ module Tui.State
   , kindLabel
   , displayInput
   , hasAudio
+  , shouldAutoplay
+  , markAutoplayed
+  , missedBeforeLabel
   ) where
 
 import qualified Api
@@ -54,13 +58,15 @@ import qualified Romaji
 import Brick.BChan (BChan)
 import qualified Brick.Widgets.List as L
 import Control.Exception (SomeException)
+import Data.List (intercalate)
 import qualified Data.Map.Strict as M
-import qualified Data.Vector as Vec
-import Data.Maybe (isJust)
+import Data.Maybe (catMaybes, isJust)
+import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time (UTCTime)
 import Data.Time.LocalTime (TimeZone)
+import qualified Data.Vector as Vec
 
 --------------------------------------------------------------------------------
 -- Public data
@@ -141,6 +147,9 @@ data AppState = AppState
   , stTZ            :: TimeZone
   , stSubmitChan    :: BChan AppEvent                  -- background submission notifications
   , stLastCompleted :: Maybe Q                         -- last question to leave the queue head
+  , stPriorWrong    :: M.Map Api.SubjectId (Int, Int)  -- cross-session wrong counts, read-only this session
+  , stAudioAutoplay :: Bool                            -- auto-play reading audio on first appearance (config)
+  , stAutoplayed    :: S.Set Api.SubjectId             -- subjects already auto-played this session
   }
 
 --------------------------------------------------------------------------------
@@ -277,6 +286,15 @@ mkSubmissions st =
   , let asgId = Api.asId asg
   ]
 
+-- | This session's wrong-answer counts, one entry per subject that was
+-- missed at least once (clean subjects are omitted).
+sessionWrongCounts :: AppState -> [(Api.SubjectId, Int, Int)]
+sessionWrongCounts st =
+  [ (sid, pMeaningWrong p, pReadingWrong p)
+  | (sid, p) <- M.toList (stProgress st)
+  , pMeaningWrong p > 0 || pReadingWrong p > 0
+  ]
+
 --------------------------------------------------------------------------------
 -- Setup helpers
 --------------------------------------------------------------------------------
@@ -371,6 +389,31 @@ hasAudio :: Q -> AppState -> Bool
 hasAudio q st =
   not (null (Api.subjAudioUrls (qSubject q))) && isJust (stAudioPlayer st)
 
+-- | Whether a question's audio should be auto-played on first appearance:
+-- reading questions on vocab, with audio configured, not already played
+-- this session, and the feature enabled.
+shouldAutoplay :: AppState -> Q -> Bool
+shouldAutoplay st q =
+  stAudioAutoplay st
+  && qKind q == QReading
+  && Api.subjType (qSubject q) `elem` [Api.Vocabulary, Api.KanaVocabulary]
+  && hasAudio q st
+  && not (S.member (Api.subjId (qSubject q)) (stAutoplayed st))
+
+markAutoplayed :: Q -> AppState -> AppState
+markAutoplayed q st =
+  st { stAutoplayed = S.insert (Api.subjId (qSubject q)) (stAutoplayed st) }
+
+-- | "Missed before" label for the all-info overlay, from cross-session
+-- wrong counts. Nothing when the subject has never been missed.
+missedBeforeLabel :: (Int, Int) -> Maybe String
+missedBeforeLabel (mw, rw)
+  | mw <= 0 && rw <= 0 = Nothing
+  | otherwise = Just $ intercalate ", " $ catMaybes
+      [ if mw > 0 then Just ("meaning ×" <> show mw) else Nothing
+      , if rw > 0 then Just ("reading ×" <> show rw) else Nothing
+      ]
+
 normMeaning :: Text -> Text
 normMeaning = collapseSpaces . britishToAmerican . T.toCaseFold . T.strip
 
@@ -409,6 +452,7 @@ britishToAmerican = T.unwords . map convertWord . T.words
       | "ourable" `T.isSuffixOf` w                  = T.dropEnd 7 w <> "orable"
       | "ourably" `T.isSuffixOf` w                  = T.dropEnd 7 w <> "orably"
       | "ourite"  `T.isSuffixOf` w                  = T.dropEnd 6 w <> "orite"
+      | "ourhood" `T.isSuffixOf` w                  = T.dropEnd 7 w <> "orhood"
       | "our"     `T.isSuffixOf` w
       , w `notElem` ourBlacklist                     = T.dropEnd 3 w <> "or"
       | "yse"     `T.isSuffixOf` w                  = T.dropEnd 3 w <> "yze"

@@ -4,6 +4,7 @@
 module Tui.Event
   ( handleEvent
   , shuffle
+  , autoplayIfNeeded
   ) where
 
 import qualified Api
@@ -41,13 +42,27 @@ handleEvent refreshFn submitFn (VtyEvent ev) = do
   st <- get
   if stOverlay st /= NoOverlay
     then handleOverlay ev
-    else case stMode st of
-      WrongAnswer _ _ -> handleWrongAnswer refreshFn ev
-      ConfirmSubmit   -> handleConfirm submitFn ev
-      Submitting      -> pure ()                           -- swallow all input
-      Finished        -> handleFinished refreshFn ev
-      _               -> handleNormal refreshFn ev
+    else do
+      case stMode st of
+        WrongAnswer _ _ -> handleWrongAnswer refreshFn ev
+        ConfirmSubmit   -> handleConfirm submitFn ev
+        Submitting      -> pure ()                           -- swallow all input
+        Finished        -> handleFinished refreshFn ev
+        _               -> handleNormal refreshFn ev
+      autoplayIfNeeded
 handleEvent _ _ _ = pure ()
+
+-- | Auto-play the current question's audio on its first appearance this
+-- session (config-gated). Called after every key event regardless of which
+-- handler ran, so it can't be missed when a new handler advances the queue.
+autoplayIfNeeded :: EventM Name AppState ()
+autoplayIfNeeded = do
+  st <- get
+  case currentQuestion st of
+    Just q | shouldAutoplay st q -> do
+      put (markAutoplayed q st)
+      liftIO $ playAudio (stAudioPlayer st) (qSubject q)
+    _ -> pure ()
 
 -- | Refresh summary and open the review-schedule overlay. On network error,
 -- leave the overlay closed and surface the error in stError instead of

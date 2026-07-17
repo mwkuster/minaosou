@@ -238,10 +238,12 @@ drawAllInfo q st =
       let stageStr = case M.lookup (Api.subjId subj) (stSubjToAsg st) of
                        Just asg -> Api.srsStageLabel (Api.asSrsStage asg)
                        Nothing  -> "?"
+          missedLine = M.lookup (Api.subjId subj) (stPriorWrong st) >>= missedBeforeLabel
       in [ str ("Level:     " <> show (Api.subjLevel subj))
          , str ("SRS stage: " <> stageStr)
-         , str ""
          ]
+      ++ [ str ("Missed before: " <> l) | Just l <- [missedLine] ]
+      ++ [ str "" ]
 
     showKanjiReadings c =
       Api.subjType c == Api.Kanji

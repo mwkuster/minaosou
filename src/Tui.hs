@@ -10,7 +10,7 @@ module Tui
 import qualified Api
 import Tui.State
 import Tui.Draw (drawUi, theMap)
-import Tui.Event (handleEvent, shuffle)
+import Tui.Event (handleEvent, shuffle, autoplayIfNeeded)
 
 import Brick
 import Brick.BChan (newBChan)
@@ -18,12 +18,22 @@ import qualified Graphics.Vty as V
 import qualified Graphics.Vty.CrossPlatform as VCP
 
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import qualified Data.Text as T
 import Data.Time (UTCTime)
 import Data.Time.LocalTime (TimeZone)
 
-runStudyTui :: Int -> Maybe String -> Api.User -> Api.Summary -> UTCTime -> TimeZone -> M.Map Api.SubjectId Api.Subject -> M.Map Api.SubjectId Api.Assignment -> [Api.Subject] -> IO (UTCTime, Api.Summary) -> ([Submission] -> IO SubmitResult) -> IO Bool
-runStudyTui rqAfter audioPlayer user summary now tz allSubjects subjToAsg subjects refreshFn submitFn = do
+runStudyTui
+  :: Int -> Maybe String -> Bool
+  -> Api.User -> Api.Summary -> UTCTime -> TimeZone
+  -> M.Map Api.SubjectId Api.Subject
+  -> M.Map Api.SubjectId Api.Assignment
+  -> M.Map Api.SubjectId (Int, Int)
+  -> [Api.Subject]
+  -> IO (UTCTime, Api.Summary)
+  -> ([Submission] -> IO SubmitResult)
+  -> IO (Bool, [(Api.SubjectId, Int, Int)])
+runStudyTui rqAfter audioPlayer audioAutoplay user summary now tz allSubjects subjToAsg priorWrong subjects refreshFn submitFn = do
   let queue0 = concatMap mkQuestions subjects
       prog0  = M.fromList [ (Api.subjId s, initProgress s) | s <- subjects ]
 
@@ -55,18 +65,21 @@ runStudyTui rqAfter audioPlayer user summary now tz allSubjects subjToAsg subjec
         , stTZ            = tz
         , stSubmitChan    = chan
         , stLastCompleted = Nothing
+        , stPriorWrong    = priorWrong
+        , stAudioAutoplay = audioAutoplay
+        , stAutoplayed    = S.empty
         }
 
   let buildVty = VCP.mkVty V.defaultConfig
   initialVty <- buildVty
   finalState <- customMain initialVty buildVty (Just chan) (app refreshFn submitFn) st0
-  pure (stWantsMore finalState)
+  pure (stWantsMore finalState, sessionWrongCounts finalState)
 
 app :: IO (UTCTime, Api.Summary) -> ([Submission] -> IO SubmitResult) -> App AppState AppEvent Name
 app refreshFn submitFn = App
   { appDraw         = drawUi
   , appChooseCursor = neverShowCursor
   , appHandleEvent  = handleEvent refreshFn submitFn
-  , appStartEvent   = pure ()
+  , appStartEvent   = autoplayIfNeeded
   , appAttrMap      = const theMap
   }
