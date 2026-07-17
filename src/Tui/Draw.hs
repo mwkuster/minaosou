@@ -19,7 +19,7 @@ import qualified Data.Map.Strict as M
 import Data.Maybe (mapMaybe, fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
-import Data.List (intercalate)
+import Data.List (intercalate, sortOn, elemIndex)
 import Data.Time (utcToLocalTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 
@@ -31,6 +31,7 @@ theMap = attrMap V.defAttr
   , (attrName "ok",      fg V.green)
   , (attrName "bad",     fg V.red)
   , (attrName "hint",    V.defAttr `V.withStyle` V.dim)
+  , (attrName "bigchar", V.defAttr `V.withStyle` V.bold `V.withForeColor` V.brightYellow)
   ]
 
 drawUi :: AppState -> [Widget Name]
@@ -89,6 +90,7 @@ drawMain st
                   case stError st of
                     Just msg -> [padTop (Pad 1) (withAttr (attrName "bad") (txtWrap msg))]
                     Nothing  -> []
+                breakdownWidgets = drawBreakdown st
                 hintLine =
                   case stMode st of
                     ConfirmSubmit ->
@@ -107,6 +109,7 @@ drawMain st
                    , str ("overridden:  " <> show (stOverridden st))
                    , str ("submissions: " <> show (length (mkSubmissions st)))
                    ]
+                ++ breakdownWidgets
                 ++ confirmWidgets
                 ++ detailWidgets
                 ++ bannerWidgets
@@ -118,8 +121,12 @@ drawMain st
       B.borderWithLabel (str ("Current" <> srsIndicator q st)) $
         padAll 1 $
           vBox $
-            [ withAttr (attrName "header") $
-                txt (T.pack (displayItem (qSubject q) <> " — " <> kindLabel (qKind q)))
+            [ hBox
+                [ withAttr (attrName "bigchar") $
+                    txt (T.pack (displayCore (qSubject q)))
+                , withAttr (attrName "header") $
+                    txt (T.pack (displayTag (qSubject q) <> " — " <> kindLabel (qKind q)))
+                ]
             , padTop (Pad 1) $
                 B.borderWithLabel (str "Input") $
                   padAll 1 $
@@ -150,17 +157,49 @@ drawMode st q =
       let shownInput = case qKind q of
             QReading -> normReading input
             QMeaning -> input
-      in vBox
+          mnemonic = case qKind q of
+            QMeaning -> Api.subjMeaningMnemonic (qSubject q)
+            QReading -> Api.subjReadingMnemonic (qSubject q)
+      in vBox $
         [ withAttr (attrName "bad") $
             txtWrap ("✗ you entered: " <> shownInput)
         , withAttr (attrName "ok") $
             txtWrap ("✓ accepted:    " <> T.pack (intercalate ", " expected))
         ]
+        ++ [ padTop (Pad 1) $ withAttr (attrName "bad") $ txtWrap ("⚠ " <> c)
+           | Just c <- [confusionHint st q input]
+           ]
+        ++ [ padTop (Pad 1) $ withAttr (attrName "hint") $ txtWrap (stripWkTags m)
+           | Just m <- [mnemonic]
+           ]
 
     Feedback msg ->
       withAttr (attrName "ok") $ txt msg
 
     _ -> emptyWidget
+
+-- | If the current subject is a kanji and the wrong answer given actually
+-- matches one of its visually-similar kanji, name the mix-up explicitly
+-- instead of leaving the user to hunt for it via Ctrl-a.
+confusionHint :: AppState -> Q -> Text -> Maybe Text
+confusionHint st q input =
+  let subj = qSubject q
+  in if Api.subjType subj /= Api.Kanji
+       then Nothing
+       else
+         let sims = mapMaybe (\vid -> M.lookup vid (stAllSubjects st))
+                              (Api.subjVisuallySimilarIds subj)
+             matches = case qKind q of
+               QMeaning ->
+                 [ s | s <- sims, normMeaning input `elem` map normMeaning (Api.subjMeanings s) ]
+               QReading ->
+                 [ s | s <- sims, normReading input `elem` map normReading (acceptedReadings s) ]
+         in case matches of
+              (s:_) -> Just $
+                "Possible mix-up: this looks like " <> T.pack (displayCore s)
+                <> " (" <> T.intercalate ", " (Api.subjMeanings s) <> "), not "
+                <> T.pack (displayCore subj)
+              [] -> Nothing
 
 drawConfirmSubmit :: AppState -> Widget Name
 drawConfirmSubmit st =
@@ -176,7 +215,7 @@ drawConfirmSubmit st =
 
 drawAllInfo :: Q -> AppState -> Widget Name
 drawAllInfo q st =
-  B.borderWithLabel (txt label) $
+  B.borderWithLabel (hBox [withAttr (attrName "bigchar") (txt coreLabel), txt tagLabel]) $
     viewport InfoViewport Vertical $
       padAll 1 $
         vBox $
@@ -191,9 +230,9 @@ drawAllInfo q st =
           ++ [ padTop (Pad 1) $
                  hintBox ["Ctrl-a/Esc/Enter=close", "↑↓/j/k=scroll"] ]
   where
-    subj  = qSubject q
-    label = fromMaybe "?" (Api.subjChars subj)
-         <> " · " <> subjTypeLabel (Api.subjType subj)
+    subj      = qSubject q
+    coreLabel = fromMaybe "?" (Api.subjChars subj)
+    tagLabel  = " · " <> subjTypeLabel (Api.subjType subj)
 
     assignSection =
       let stageStr = case M.lookup (Api.subjId subj) (stSubjToAsg st) of
@@ -304,6 +343,48 @@ drawReviewSchedule st =
                   <> strPadLeft 4 (show openN) )
              ) rows ++
              [ padTop (Pad 1) $ hintBox ["Ctrl-v/Esc=close", "↑↓/j/k=scroll"] ]
+
+-- | Session-end breakdown: for each reviewed subject, whether it was
+-- answered with zero mistakes ("clean") or missed at least once, grouped by
+-- subject type and by (pre-review) SRS stage.
+drawBreakdown :: AppState -> [Widget Name]
+drawBreakdown st =
+  case perSubject of
+    [] -> []
+    _  -> [ padTop (Pad 1) $ withAttr (attrName "hint") $ str "--- by type ---" ]
+       ++ map row (sortByOrder typeOrder byType)
+       ++ [ padTop (Pad 1) $ withAttr (attrName "hint") $ str "--- by SRS stage ---" ]
+       ++ map row (sortByOrder stageOrder byStage)
+  where
+    perSubject =
+      [ (subj, missed)
+      | (sid, p) <- M.toList (stProgress st)
+      , Just subj <- [M.lookup sid (stAllSubjects st)]
+      , let missed = pMeaningWrong p > 0 || pReadingWrong p > 0
+      ]
+
+    tally :: (Api.Subject -> Text) -> [(Text, (Int, Int))]
+    tally keyFn = M.toList $ M.fromListWith addPair
+      [ (keyFn subj, if missed then (0, 1) else (1, 0)) | (subj, missed) <- perSubject ]
+    addPair (c1, m1) (c2, m2) = (c1 + c2, m1 + m2)
+
+    byType  = tally (subjTypeLabel . Api.subjType)
+    byStage = tally stageOf
+      where
+        stageOf subj =
+          case M.lookup (Api.subjId subj) (stSubjToAsg st) of
+            Just asg -> T.pack (Api.srsStageLabel (Api.asSrsStage asg))
+            Nothing  -> "?"
+
+    typeOrder  = map subjTypeLabel [Api.Radical, Api.Kanji, Api.Vocabulary, Api.KanaVocabulary]
+    stageOrder = map (T.pack . Api.srsStageLabel)
+                     [Api.Initiate, Api.Apprentice, Api.Guru, Api.Master, Api.Enlightened, Api.Burned]
+
+    sortByOrder order = sortOn (\(label, _) -> fromMaybe maxBound (elemIndex label order))
+
+    row (label, (clean, missed)) =
+      str (strPadRight 16 (T.unpack label)
+        <> "clean: " <> show clean <> "  missed: " <> show missed)
 
 subjTypeLabel :: Api.SubjectType -> Text
 subjTypeLabel Api.Radical        = "Radical"

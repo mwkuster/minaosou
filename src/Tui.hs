@@ -27,7 +27,7 @@ runStudyTui rqAfter audioPlayer user summary now tz allSubjects subjToAsg subjec
   let queue0 = concatMap mkQuestions subjects
       prog0  = M.fromList [ (Api.subjId s, initProgress s) | s <- subjects ]
 
-  queue <- shuffle queue0
+  queue <- spaceOutSameSubject <$> shuffle queue0
   chan  <- newBChan 10
 
   let st0 = AppState

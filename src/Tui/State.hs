@@ -32,6 +32,7 @@ module Tui.State
 
     -- Setup
   , mkQuestions
+  , spaceOutSameSubject
   , acceptedReadings
 
     -- Answer checking / display
@@ -40,6 +41,8 @@ module Tui.State
   , normReading
   , britishToAmerican
   , displayItem
+  , displayCore
+  , displayTag
   , kindLabel
   , displayInput
   , hasAudio
@@ -287,6 +290,22 @@ mkQuestions s =
        , not (null rs)
        ]
 
+-- | Rearrange so meaning/reading questions for the same subject never land
+-- adjacent to each other (a flat shuffle can place them back-to-back by
+-- chance, which defeats the within-session spacing effect).
+spaceOutSameSubject :: [Q] -> [Q]
+spaceOutSameSubject = go
+  where
+    go (x : y : rest)
+      | sameSubject x y =
+          case break (not . sameSubject x) rest of
+            (same, z : zs) -> x : z : go (y : same ++ zs)
+            (_,    [])     -> x : y : rest
+      | otherwise = x : go (y : rest)
+    go xs = xs
+
+    sameSubject a b = Api.subjId (qSubject a) == Api.subjId (qSubject b)
+
 initProgress :: Api.Subject -> Progress
 initProgress s =
   let needsReading =
@@ -318,22 +337,27 @@ checkAnswer (Q subj kind) ans =
          )
 
 displayItem :: Api.Subject -> String
-displayItem s =
-  let tag =
-        case Api.subjType s of
-          Api.Kanji          -> " (Kanji)"
-          Api.Radical        -> " (Radical)"
-          Api.Vocabulary     -> " (Vocab)"
-          Api.KanaVocabulary -> " (Vocab)"
-      core =
-        case Api.subjChars s of
-          Just c | let cs = T.strip c, not (T.null cs) -> T.unpack cs
-          _ ->
-            let m = case Api.subjMeanings s of
-                      (x:_) -> T.unpack x
-                      []    -> "?"
-            in m <> " (#" <> show (Api.subjId s) <> ")"
-  in core <> tag
+displayItem s = displayCore s <> displayTag s
+
+-- | Just the character(s) (or meaning fallback), with no type tag.
+displayCore :: Api.Subject -> String
+displayCore s =
+  case Api.subjChars s of
+    Just c | let cs = T.strip c, not (T.null cs) -> T.unpack cs
+    _ ->
+      let m = case Api.subjMeanings s of
+                (x:_) -> T.unpack x
+                []    -> "?"
+      in m <> " (#" <> show (Api.subjId s) <> ")"
+
+-- | The trailing " (Kanji)" / " (Radical)" / " (Vocab)" annotation.
+displayTag :: Api.Subject -> String
+displayTag s =
+  case Api.subjType s of
+    Api.Kanji          -> " (Kanji)"
+    Api.Radical        -> " (Radical)"
+    Api.Vocabulary     -> " (Vocab)"
+    Api.KanaVocabulary -> " (Vocab)"
 
 kindLabel :: QKind -> String
 kindLabel QMeaning = "meaning"
