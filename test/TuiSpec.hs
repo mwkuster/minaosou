@@ -107,6 +107,7 @@ stateWith prog subjToAsg = Tui.AppState
   , Tui.stPriorWrong    = M.empty
   , Tui.stAudioAutoplay = False
   , Tui.stAutoplayed    = S.empty
+  , Tui.stPracticeOnly  = False
   }
 
 --------------------------------------------------------------------------------

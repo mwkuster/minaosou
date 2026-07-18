@@ -19,6 +19,7 @@ module Api
   , srsStageLabel
   , Assignment(..)
   , getAvailableAssignments
+  , getAssignmentsBySubjectIds
 
   , SubjectType(..)
   , Subject(..)
@@ -272,6 +273,28 @@ getAvailableAssignments token now n = runReq defaultHttpConfig $ do
   let env = responseBody resp :: AssignmentsEnvelope
       as  = map toAssignment (aeData env)
   pure (take n as)
+
+-- | Fetch assignments for specific subjects (regardless of review
+-- availability) -- used to show the current SRS stage for a fixed set of
+-- subjects, e.g. leech-only practice sessions. Chunked like
+-- 'getSubjectsByIds' to avoid huge URLs.
+getAssignmentsBySubjectIds :: String -> [SubjectId] -> IO [Assignment]
+getAssignmentsBySubjectIds token ids =
+  fmap concat $ mapM (getAssignmentChunk token) (chunkN 100 ids)
+
+getAssignmentChunk :: String -> [SubjectId] -> IO [Assignment]
+getAssignmentChunk token idsChunk = runReq defaultHttpConfig $ do
+  let idsParam = T.intercalate "," (map (T.pack . show . unSubjectId) idsChunk)
+
+  resp <- req
+    GET
+    (https "api.wanikani.com" /: "v2" /: "assignments")
+    NoReqBody
+    jsonResponse
+    ( "subject_ids" =: idsParam <> apiOpts token )
+
+  let env = responseBody resp :: AssignmentsEnvelope
+  pure (map toAssignment (aeData env))
 
 --------------------------------------------------------------------------------
 -- Subjects (to show prompts + accepted answers)

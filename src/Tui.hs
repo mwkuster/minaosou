@@ -30,10 +30,11 @@ runStudyTui
   -> M.Map Api.SubjectId Api.Assignment
   -> M.Map Api.SubjectId (Int, Int)
   -> [Api.Subject]
+  -> Bool
   -> IO (UTCTime, Api.Summary)
   -> ([Submission] -> IO SubmitResult)
   -> IO (Bool, [(Api.SubjectId, Int, Int)])
-runStudyTui rqAfter audioPlayer audioAutoplay user summary now tz allSubjects subjToAsg priorWrong subjects refreshFn submitFn = do
+runStudyTui rqAfter audioPlayer audioAutoplay user summary now tz allSubjects subjToAsg priorWrong subjects practiceOnly refreshFn submitFn = do
   let queue0 = concatMap mkQuestions subjects
       prog0  = M.fromList [ (Api.subjId s, initProgress s) | s <- subjects ]
 
@@ -68,6 +69,7 @@ runStudyTui rqAfter audioPlayer audioAutoplay user summary now tz allSubjects su
         , stPriorWrong    = priorWrong
         , stAudioAutoplay = audioAutoplay
         , stAutoplayed    = S.empty
+        , stPracticeOnly  = practiceOnly
         }
 
   let buildVty = VCP.mkVty V.defaultConfig

@@ -125,13 +125,13 @@ handleWrongAnswer refreshFn ev =
       st <- get
       case currentQuestion st of
         Nothing -> pure ()
-        Just q  -> put (advanceOverride q st { stMode = Normal })
+        Just q  -> put (advanceOverride q st { stMode = Normal }) >> resetMainScroll
 
     V.EvKey (V.KChar 'r') [V.MCtrl] -> do
       st <- get
       case currentQuestion st of
         Nothing -> pure ()
-        Just q  -> put (requeueOnly q st { stMode = Normal })
+        Just q  -> put (requeueOnly q st { stMode = Normal }) >> resetMainScroll
 
     V.EvKey (V.KChar 'p') [V.MCtrl] -> do
       st <- get
@@ -149,13 +149,18 @@ handleWrongAnswer refreshFn ev =
       st <- get
       case currentQuestion st of
         Nothing -> pure ()
-        Just q  -> put (requeueWrong q st { stMode = Normal })
+        Just q  -> put (requeueWrong q st { stMode = Normal }) >> resetMainScroll
 
     V.EvKey V.KEsc [] -> do
       st <- get
-      put st { stMode = Normal }
+      put st { stMode = Normal } >> resetMainScroll
+
+    V.EvKey V.KUp []   -> vScrollBy (viewportScroll MainViewport) (-1)
+    V.EvKey V.KDown [] -> vScrollBy (viewportScroll MainViewport) 1
 
     _ -> pure ()
+  where
+    resetMainScroll = vScrollToBeginning (viewportScroll MainViewport)
 
 handleConfirm :: ([Submission] -> IO SubmitResult) -> V.Event -> EventM Name AppState ()
 handleConfirm submitFn ev =
@@ -219,13 +224,13 @@ handleNormal refreshFn ev =
       st <- get
       case currentQuestion st of
         Nothing -> pure ()
-        Just q  -> put (advanceOverride q st)
+        Just q  -> put (advanceOverride q st) >> resetMainScroll
 
     V.EvKey (V.KChar 'r') [V.MCtrl] -> do
       st <- get
       case currentQuestion st of
         Nothing -> pure ()
-        Just q  -> put (requeueOnly q st)
+        Just q  -> put (requeueOnly q st) >> resetMainScroll
 
     V.EvKey (V.KChar 'p') [V.MCtrl] -> do
       st <- get
@@ -248,7 +253,7 @@ handleNormal refreshFn ev =
         Nothing -> pure ()
         Just q  ->
           let ans = T.strip (stInput st)
-          in if T.null ans then pure () else put (submitAnswer q ans st)
+          in if T.null ans then pure () else put (submitAnswer q ans st) >> resetMainScroll
 
     V.EvKey V.KBS [] -> do
       st <- get
@@ -272,7 +277,12 @@ handleNormal refreshFn ev =
         , stError = Nothing
         }
 
+    V.EvKey V.KUp []   -> vScrollBy (viewportScroll MainViewport) (-1)
+    V.EvKey V.KDown [] -> vScrollBy (viewportScroll MainViewport) 1
+
     _ -> pure ()
+  where
+    resetMainScroll = vScrollToBeginning (viewportScroll MainViewport)
 
 -- | Fire-and-forget audio playback via configured external player.
 playAudio :: Maybe String -> Api.Subject -> IO ()

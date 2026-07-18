@@ -80,8 +80,9 @@ drawMain st
                 detailWidgets =
                   case stSubmitDetails st of
                     [] -> []
-                    ds -> padTop (Pad 1) (withAttr (attrName "hint") (str "--- submitted ---"))
-                        : map (withAttr (attrName "hint") . txtWrap . T.pack) ds
+                    ds -> padTop (Pad 1) (withAttr (attrName "hint")
+                            (str (if stPracticeOnly st then "--- practice recorded ---" else "--- submitted ---")))
+                        : map drawSubmitDetail ds
                 bannerWidgets =
                   case stBanner st of
                     Just msg -> [padTop (Pad 1) (txt msg)]
@@ -101,7 +102,10 @@ drawMain st
                           hintBox $ ["Esc=quit", "Ctrl-u=user", "Ctrl-v=reviews"] ++
                             [ "Ctrl-n=next batch" | stHasMore st ] ++
                             [ "↑↓/j/k=scroll" | not (null (stSubmitDetails st)) ]
-                    _ -> hintBox ["Ctrl-s=submit to WaniKani", "Esc=quit", "Ctrl-u=user", "Ctrl-v=reviews"]
+                    _ -> hintBox $
+                           [ if stPracticeOnly st then "Ctrl-s=finish" else "Ctrl-s=submit to WaniKani"
+                           , "Esc=quit", "Ctrl-u=user", "Ctrl-v=reviews"
+                           ]
             in vBox
                  ( [ withAttr (attrName "ok") $ str "Session finished."
                    , str ("correct:     " <> show (stCorrect st))
@@ -119,6 +123,7 @@ drawMain st
 
     Just q ->
       B.borderWithLabel (str ("Current" <> srsIndicator q st)) $
+        viewport MainViewport Vertical $
         padAll 1 $
           vBox $
             [ hBox
@@ -160,6 +165,12 @@ drawMode st q =
           mnemonic = case qKind q of
             QMeaning -> Api.subjMeaningMnemonic (qSubject q)
             QReading -> Api.subjReadingMnemonic (qSubject q)
+          compHints
+            | Api.subjType (qSubject q) `elem` [Api.Vocabulary, Api.KanaVocabulary]
+            = case qKind q of
+                QReading -> componentKanjiReadings st (qSubject q)
+                QMeaning -> componentKanjiMeanings st (qSubject q)
+            | otherwise = []
       in vBox $
         [ withAttr (attrName "bad") $
             txtWrap ("✗ you entered: " <> shownInput)
@@ -168,6 +179,10 @@ drawMode st q =
         ]
         ++ [ padTop (Pad 1) $ withAttr (attrName "bad") $ txtWrap ("⚠ " <> c)
            | Just c <- [confusionHint st q input]
+           ]
+        ++ [ padTop (Pad 1) $ withAttr (attrName "hint") $
+               txtWrap ("Kanji: " <> T.intercalate "  ·  " compHints)
+           | not (null compHints)
            ]
         ++ [ padTop (Pad 1) $ withAttr (attrName "hint") $ txtWrap (stripWkTags m)
            | Just m <- [mnemonic]
@@ -201,14 +216,54 @@ confusionHint st q input =
                 <> T.pack (displayCore subj)
               [] -> Nothing
 
+-- | For a vocabulary subject, the readings of its component kanji, formatted
+-- as "字 (reading, reading)" — helps explain a wrong reading answer by
+-- showing how the vocab reading is built from its kanji.
+componentKanjiReadings :: AppState -> Api.Subject -> [Text]
+componentKanjiReadings st subj =
+  [ fromMaybe "?" (Api.subjChars c) <> " (" <> T.intercalate ", " rs <> ")"
+  | cid <- Api.subjComponentIds subj
+  , Just c <- [M.lookup cid (stAllSubjects st)]
+  , Api.subjType c == Api.Kanji
+  , let rs = acceptedReadings c
+  , not (null rs)
+  ]
+
+-- | For a vocabulary subject, the meanings of its component kanji, formatted
+-- as "字 (meaning, meaning)" — helps explain a wrong meaning answer by
+-- showing how the vocab meaning is built from its kanji.
+componentKanjiMeanings :: AppState -> Api.Subject -> [Text]
+componentKanjiMeanings st subj =
+  [ fromMaybe "?" (Api.subjChars c) <> " (" <> T.intercalate ", " ms <> ")"
+  | cid <- Api.subjComponentIds subj
+  , Just c <- [M.lookup cid (stAllSubjects st)]
+  , Api.subjType c == Api.Kanji
+  , let ms = Api.subjMeanings c
+  , not (null ms)
+  ]
+
+-- | A submitted-review detail line, e.g. "字 (word)  incorrect (m:1 r:0) →
+-- Guru" — highlighted in the "bad" attr when it was answered incorrectly, so
+-- leeches stand out in the post-submission list rather than blending into
+-- the rest of the (all dim) detail lines.
+drawSubmitDetail :: String -> Widget Name
+drawSubmitDetail d
+  | "incorrect" `T.isInfixOf` T.pack d = withAttr (attrName "bad")  $ txtWrap (T.pack d)
+  | otherwise                          = withAttr (attrName "hint") $ txtWrap (T.pack d)
+
 drawConfirmSubmit :: AppState -> Widget Name
 drawConfirmSubmit st =
   let subs = mkSubmissions st
       total = length subs
       withMistakes = length [ () | s <- subs, subWrongMeaning s > 0 || subWrongReading s > 0 ]
+      prompt
+        | stPracticeOnly st =
+            "Finish practice round of " <> show total <> " items? [y/N]"
+        | otherwise =
+            "Submit " <> show total <> " reviews to WaniKani? [y/N]"
   in vBox
       [ withAttr (attrName "header") $
-          str ("Submit " <> show total <> " reviews to WaniKani? [y/N]")
+          str prompt
       , padTop (Pad 1) $
           str ("Items with mistakes: " <> show withMistakes)
       ]
@@ -420,7 +475,7 @@ normalHintWidget q st =
     WrongAnswer _ _ ->
       hintBox $
         [ "Ctrl-o=override correct", "Ctrl-r=requeue (no penalty)", "Enter=requeue (wrong)"
-        , "Ctrl-a=all info", "Ctrl-u=user", "Ctrl-v=reviews"
+        , "Ctrl-a=all info", "Ctrl-u=user", "Ctrl-v=reviews", "↑↓=scroll"
         ] ++ [ "Ctrl-p=play audio" | hasAudio q st ]
     _ ->
       hintBox $

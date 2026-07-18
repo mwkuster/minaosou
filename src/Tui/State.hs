@@ -104,7 +104,7 @@ data Progress = Progress
 -- TUI state
 --------------------------------------------------------------------------------
 
-data Name = QueueList | InfoViewport | UserViewport | ReviewViewport | DoneViewport
+data Name = QueueList | InfoViewport | UserViewport | ReviewViewport | DoneViewport | MainViewport
   deriving (Ord, Eq, Show)
 
 data Overlay = NoOverlay | AllInfo | UserInfo | ReviewSchedule
@@ -150,6 +150,7 @@ data AppState = AppState
   , stPriorWrong    :: M.Map Api.SubjectId (Int, Int)  -- cross-session wrong counts, read-only this session
   , stAudioAutoplay :: Bool                            -- auto-play reading audio on first appearance (config)
   , stAutoplayed    :: S.Set Api.SubjectId             -- subjects already auto-played this session
+  , stPracticeOnly  :: Bool                            -- leech practice session: never submitted to WaniKani
   }
 
 --------------------------------------------------------------------------------

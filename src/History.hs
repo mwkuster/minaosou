@@ -10,6 +10,7 @@ module History
   , loadHistory
   , saveHistory
   , mergeSession
+  , applyPracticeSession
   , historyCounts
   ) where
 
@@ -90,6 +91,28 @@ mergeSession now sessionCounts existing = foldl' step existing sessionCounts
           , leWrongReading = leWrongReading old + leWrongReading new
           , leLastSeen     = leLastSeen new
           }
+
+-- | After a leech-only practice session ("kroki leeches --study"), replace
+-- each practiced subject's entry instead of adding to it: dropped entirely
+-- if answered fully correctly this round (it "graduated" out of leech
+-- status), otherwise reset to just this round's mistakes. Unlike
+-- 'mergeSession' (which accumulates real WaniKani review history forever,
+-- since that's a record of actual SRS performance), practice performance
+-- shouldn't pile indefinitely on top of past mistakes -- the whole point is
+-- to let a leech drop off the list once it's clean.
+applyPracticeSession
+  :: UTCTime
+  -> [Api.SubjectId]
+  -> [(Api.SubjectId, Int, Int)]
+  -> M.Map Api.SubjectId LeechEntry
+  -> M.Map Api.SubjectId LeechEntry
+applyPracticeSession now practiced sessionCounts existing =
+  foldl' step existing practiced
+  where
+    wrongMap = M.fromList [ (sid, (wm, wr)) | (sid, wm, wr) <- sessionCounts ]
+    step acc sid = case M.lookup sid wrongMap of
+      Nothing       -> M.delete sid acc
+      Just (wm, wr) -> M.insert sid (LeechEntry sid wm wr now) acc
 
 historyCounts :: M.Map Api.SubjectId LeechEntry -> M.Map Api.SubjectId (Int, Int)
 historyCounts = M.map (\e -> (leWrongMeaning e, leWrongReading e))

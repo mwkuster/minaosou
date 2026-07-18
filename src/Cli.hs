@@ -2,6 +2,7 @@ module Cli
   ( Options(..)
   , Command(..)
   , StudyOpts(..)
+  , LeechesOpts(..)
   , parseCli
   ) where
 
@@ -12,10 +13,15 @@ data StudyOpts = StudyOpts
   , studyRequeueAfter :: Maybe Int
   } deriving (Show, Eq)
 
+newtype LeechesOpts = LeechesOpts
+  { leechesStudy :: Bool
+  } deriving (Show, Eq)
+
 data Command
   = WhoAmI
   | Reviews
   | Study StudyOpts
+  | Leeches LeechesOpts
   | Init
   deriving (Show, Eq)
 
@@ -78,6 +84,8 @@ commandParser =
          (info (pure Reviews) (progDesc "Show review schedule for the next 24 hours"))
     <> command "study"
          (info studyParser   (progDesc "Start a review batch (max N items)"))
+    <> command "leeches"
+         (info leechesParser (progDesc "List subjects tracked as leeches (repeated wrong answers across sessions)"))
     <> command "init"
          (info (pure Init)   (progDesc "Create or overwrite ~/.config/kroki/config interactively"))
     )
@@ -89,3 +97,11 @@ studyParser =
     StudyOpts
       <$> optional batchSizeOption
       <*> optional requeueAfterOption
+
+leechesParser :: Parser Command
+leechesParser =
+  fmap Leeches $
+    LeechesOpts
+      <$> switch
+            ( long "study"
+           <> help "Interactively practice all tracked leeches; never submitted to WaniKani, only updates the local leech tracker" )

@@ -326,3 +326,27 @@ historySpec = describe "History" $ do
     it "projects to (meaning, reading) pairs" $ do
       let merged = History.mergeSession t1 [(Api.SubjectId 1, 3, 4)] M.empty
       History.historyCounts merged `shouldBe` M.singleton (Api.SubjectId 1) (3, 4)
+
+  describe "applyPracticeSession" $ do
+    it "drops a leech answered fully correctly this round" $ do
+      let existing = History.mergeSession t1 [(Api.SubjectId 1, 2, 1)] M.empty
+          after    = History.applyPracticeSession t2 [Api.SubjectId 1] [] existing
+      History.historyCounts after `shouldBe` M.empty
+
+    it "resets (not adds) counts for a leech still missed this round" $ do
+      let existing = History.mergeSession t1 [(Api.SubjectId 1, 5, 5)] M.empty
+          after    = History.applyPracticeSession t2 [Api.SubjectId 1]
+                       [(Api.SubjectId 1, 1, 0)] existing
+      History.historyCounts after `shouldBe` M.singleton (Api.SubjectId 1) (1, 0)
+
+    it "bumps last_seen for a leech that is kept" $ do
+      let existing = History.mergeSession t1 [(Api.SubjectId 1, 1, 0)] M.empty
+          after    = History.applyPracticeSession t2 [Api.SubjectId 1]
+                       [(Api.SubjectId 1, 1, 0)] existing
+      fmap History.leLastSeen (M.lookup (Api.SubjectId 1) after) `shouldBe` Just t2
+
+    it "leaves subjects not part of this practice round untouched" $ do
+      let existing = History.mergeSession t1
+                       [(Api.SubjectId 1, 1, 0), (Api.SubjectId 2, 3, 0)] M.empty
+          after    = History.applyPracticeSession t2 [Api.SubjectId 1] [] existing
+      History.historyCounts after `shouldBe` M.singleton (Api.SubjectId 2) (3, 0)

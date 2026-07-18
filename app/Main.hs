@@ -14,9 +14,9 @@ import Control.Exception (SomeException, bracket_, displayException, try)
 import System.Environment (lookupEnv)
 import System.Exit (die)
 
-import Data.Time (getCurrentTime, getCurrentTimeZone, utcToLocalTime)
+import Data.Time (getCurrentTime, getCurrentTimeZone, utcToLocalTime, TimeZone)
 import Data.Time.Format (defaultTimeLocale, formatTime)
-import Data.List (nub)
+import Data.List (nub, sortOn)
 import Data.Maybe (fromMaybe)
 import Data.Map.Strict qualified as M
 import qualified Data.Text as T
@@ -38,6 +38,193 @@ main = do
           (die "Missing API token. Provide --token, set WANIKANI_API_TOKEN, or put token=... into ~/.config/kroki/config")
           pure
           token
+
+  let runLeechList t history = do
+        tz <- getCurrentTimeZone
+        let entries = sortOn (negate . leechTotal) (M.elems history)
+        subjects <- Api.getSubjectsByIds t (map History.leSubjectId entries)
+        let subjMap = M.fromList [ (Api.subjId s, s) | s <- subjects ]
+
+        putStrLn "Item                        Lvl  Meaning  Reading  Last seen"
+        putStrLn "--------------------------------------------------------------"
+        mapM_ (putStrLn . fmtLeechRow tz subjMap) entries
+
+      -- | Practice tracked leeches, batch-size at a time (worst first).
+      -- Unlike 'study', the queue comes straight from leeches.json (not
+      -- WaniKani's "available reviews"), and results are never submitted to
+      -- WaniKani -- 'submitFn' here just records the round locally so a
+      -- clean answer can let a leech drop off the list (see
+      -- History.applyPracticeSession).
+      runLeechStudy t initialHistory = do
+        user <- Api.getUser t
+        summary0 <- Api.getSummary t
+        let batchSize =
+              Config.cfgBatchSize cfg <|> Just Config.defaultBatchSize
+            rqAfter =
+              fromMaybe Config.defaultRequeueAfter (Config.cfgRequeueAfter cfg)
+            audioAutoplay = fromMaybe False (Config.cfgAudioAutoplay cfg)
+            audioPlayer   = Config.cfgAudioPlayer cfg
+            raw = fromMaybe 10 batchSize
+            n   = if raw == 0 then maxBound else raw
+            orderedIds = map History.leSubjectId
+                           (sortOn (negate . leechTotal) (M.elems initialHistory))
+
+            loop history remainingIds
+              | null remainingIds = pure ()
+              | otherwise = do
+                  let (batchIds, restIds) = splitAt n remainingIds
+                  now <- getCurrentTime
+                  tz  <- getCurrentTimeZone
+
+                  leechSubjects <- Api.getSubjectsByIds t batchIds
+                  let compIds = nub [ cid | s <- leechSubjects, cid <- Api.subjComponentIds s ]
+                  compSubjects <- Api.getSubjectsByIds t compIds
+                  let amalgIds = nub
+                        [ aid
+                        | s <- leechSubjects
+                        , Api.subjType s == Api.Kanji
+                        , aid <- Api.subjAmalgamationIds s
+                        ]
+                  amalgSubjects <- Api.getSubjectsByIds t amalgIds
+                  let simIds = nub
+                        [ vid
+                        | s <- leechSubjects
+                        , Api.subjType s == Api.Kanji
+                        , vid <- Api.subjVisuallySimilarIds s
+                        ]
+                  simSubjects <- Api.getSubjectsByIds t simIds
+                  let allSubjMap = M.fromList
+                        [ (Api.subjId s, s)
+                        | s <- leechSubjects ++ compSubjects ++ amalgSubjects ++ simSubjects
+                        ]
+                  asgs <- Api.getAssignmentsBySubjectIds t batchIds
+                  let subjToAsg = M.fromList [ (Api.asSubjectId a, a) | a <- asgs ]
+                      asgToInfo = M.fromList
+                        [ (Api.asId asg, (subj, asg))
+                        | subj <- leechSubjects
+                        , Just asg <- [M.lookup (Api.subjId subj) subjToAsg]
+                        ]
+                      priorWrong = History.historyCounts history
+                      refreshSummary = do
+                        now'     <- getCurrentTime
+                        summary' <- Api.getSummary t
+                        pure (now', summary')
+                      submitPractice subs =
+                        pure Tui.SubmitResult
+                          { Tui.srMessage = "Practice recorded locally (not submitted to WaniKani)."
+                          , Tui.srHasMore = not (null restIds)
+                          , Tui.srDetails = map (fmtLeechPractice asgToInfo) subs
+                          }
+
+                  (wantsMore, sessionCounts) <-
+                    Tui.runStudyTui rqAfter audioPlayer audioAutoplay user summary0 now tz
+                                    allSubjMap subjToAsg priorWrong leechSubjects True
+                                    refreshSummary submitPractice
+                  now2 <- getCurrentTime
+                  let history' = History.applyPracticeSession now2 batchIds sessionCounts history
+                  History.saveHistory history'
+                  if wantsMore && not (null restIds)
+                    then loop history' restIds
+                    else pure ()
+
+        loop initialHistory orderedIds
+
+      runStudy studyOpts = do
+        t <- requireToken
+        let batchSize =
+              Cli.studyBatchSize studyOpts
+              <|> Config.cfgBatchSize cfg
+              <|> Just Config.defaultBatchSize
+            rqAfter =
+              fromMaybe Config.defaultRequeueAfter
+                (Cli.studyRequeueAfter studyOpts <|> Config.cfgRequeueAfter cfg)
+            audioAutoplay = fromMaybe False (Config.cfgAudioAutoplay cfg)
+            raw = fromMaybe 10 batchSize
+            n   = if raw == 0 then maxBound else raw
+        now  <- getCurrentTime
+        tz   <- getCurrentTimeZone
+        user <- Api.getUser t
+        summary <- Api.getSummary t
+
+        let runBatch = do
+              now2 <- getCurrentTime
+              as   <- Api.getAvailableAssignments t now2 n
+              if null as
+                then putStrLn "No reviews available right now."
+                else do
+                  let subjectIds = map Api.asSubjectId as
+                      subjToAsg  = M.fromList [ (Api.asSubjectId a, a) | a <- as ]
+                  subjects <- Api.getSubjectsByIds t subjectIds
+                  let compIds = nub [ cid | s <- subjects, cid <- Api.subjComponentIds s ]
+                  compSubjects <- Api.getSubjectsByIds t compIds
+                  let amalgIds = nub
+                        [ aid
+                        | s <- subjects
+                        , Api.subjType s == Api.Kanji
+                        , aid <- Api.subjAmalgamationIds s
+                        ]
+                  amalgSubjects <- Api.getSubjectsByIds t amalgIds
+                  let simIds = nub
+                        [ vid
+                        | s <- subjects
+                        , Api.subjType s == Api.Kanji
+                        , vid <- Api.subjVisuallySimilarIds s
+                        ]
+                  simSubjects <- Api.getSubjectsByIds t simIds
+                  let allSubjMap = M.fromList
+                        [ (Api.subjId s, s)
+                        | s <- subjects ++ compSubjects ++ amalgSubjects ++ simSubjects
+                        ]
+                      asgToInfo  = M.fromList
+                        [ (Api.asId asg, (subj, asg))
+                        | subj <- subjects
+                        , Just asg <- [M.lookup (Api.subjId subj) subjToAsg]
+                        ]
+                  let audioPlayer = Config.cfgAudioPlayer cfg
+                  let refreshSummary = do
+                        now' <- getCurrentTime
+                        summary' <- Api.getSummary t
+                        pure (now', summary')
+                  history <- History.loadHistory
+                  let priorWrong = History.historyCounts history
+                  (wantsMore, sessionCounts) <-
+                    Tui.runStudyTui rqAfter audioPlayer audioAutoplay user summary now tz
+                                    allSubjMap subjToAsg priorWrong subjects False
+                                    refreshSummary (submitBatch asgToInfo)
+                  now3 <- getCurrentTime
+                  History.saveHistory (History.mergeSession now3 sessionCounts history)
+                  if wantsMore then runBatch else pure ()
+
+            submitBatch asgToInfo subs = do
+              ts <- getCurrentTime
+              outcomes <- mapConcurrentlyN maxParallelSubmits (postReview ts) subs
+              now2     <- getCurrentTime
+              summary2 <- Api.getSummary t
+              as2      <- Api.getAvailableAssignments t now2 n
+              let details   = map (fmtSub asgToInfo) outcomes
+                  succeeded = length [() | (_, Right _) <- outcomes]
+                  failed    = length outcomes - succeeded
+                  msg       = "Submitted " <> show succeeded
+                           <> (if failed == 0
+                                then ""
+                                else " (" <> show failed <> " failed)")
+                           <> ". Reviews available now: "
+                           <> show (Api.reviewsAvailableNow now2 summary2)
+              pure Tui.SubmitResult
+                { Tui.srMessage = msg
+                , Tui.srHasMore = not (null as2)
+                , Tui.srDetails = details
+                }
+
+            postReview ts s = do
+              r <- try (Api.createReview t
+                         (Tui.subAssignmentId s)
+                         (Tui.subWrongMeaning s)
+                         (Tui.subWrongReading s)
+                         ts) :: IO (Either SomeException Api.ReviewResult)
+              pure (s, r)
+
+        runBatch
 
   case Cli.optCommand opts of
     Cli.Init -> Config.initConfig
@@ -73,102 +260,16 @@ main = do
         )
         rows
 
-    Cli.Study studyOpts -> do
+    Cli.Leeches leechOpts -> do
       t <- requireToken
-      let batchSize =
-            Cli.studyBatchSize studyOpts
-            <|> Config.cfgBatchSize cfg
-            <|> Just Config.defaultBatchSize
-          rqAfter =
-            fromMaybe Config.defaultRequeueAfter
-              (Cli.studyRequeueAfter studyOpts <|> Config.cfgRequeueAfter cfg)
-          audioAutoplay = fromMaybe False (Config.cfgAudioAutoplay cfg)
-          raw = fromMaybe 10 batchSize
-          n   = if raw == 0 then maxBound else raw
-      now  <- getCurrentTime
-      tz   <- getCurrentTimeZone
-      user <- Api.getUser t
-      summary <- Api.getSummary t
+      history <- History.loadHistory
+      if M.null history
+        then putStrLn "No leeches tracked yet."
+        else if Cli.leechesStudy leechOpts
+          then runLeechStudy t history
+          else runLeechList t history
 
-      let runBatch = do
-            now2 <- getCurrentTime
-            as   <- Api.getAvailableAssignments t now2 n
-            if null as
-              then putStrLn "No reviews available right now."
-              else do
-                let subjectIds = map Api.asSubjectId as
-                    subjToAsg  = M.fromList [ (Api.asSubjectId a, a) | a <- as ]
-                subjects <- Api.getSubjectsByIds t subjectIds
-                let compIds = nub [ cid | s <- subjects, cid <- Api.subjComponentIds s ]
-                compSubjects <- Api.getSubjectsByIds t compIds
-                let amalgIds = nub
-                      [ aid
-                      | s <- subjects
-                      , Api.subjType s == Api.Kanji
-                      , aid <- Api.subjAmalgamationIds s
-                      ]
-                amalgSubjects <- Api.getSubjectsByIds t amalgIds
-                let simIds = nub
-                      [ vid
-                      | s <- subjects
-                      , Api.subjType s == Api.Kanji
-                      , vid <- Api.subjVisuallySimilarIds s
-                      ]
-                simSubjects <- Api.getSubjectsByIds t simIds
-                let allSubjMap = M.fromList
-                      [ (Api.subjId s, s)
-                      | s <- subjects ++ compSubjects ++ amalgSubjects ++ simSubjects
-                      ]
-                    asgToInfo  = M.fromList
-                      [ (Api.asId asg, (subj, asg))
-                      | subj <- subjects
-                      , Just asg <- [M.lookup (Api.subjId subj) subjToAsg]
-                      ]
-                let audioPlayer = Config.cfgAudioPlayer cfg
-                let refreshSummary = do
-                      now' <- getCurrentTime
-                      summary' <- Api.getSummary t
-                      pure (now', summary')
-                history <- History.loadHistory
-                let priorWrong = History.historyCounts history
-                (wantsMore, sessionCounts) <-
-                  Tui.runStudyTui rqAfter audioPlayer audioAutoplay user summary now tz
-                                  allSubjMap subjToAsg priorWrong subjects
-                                  refreshSummary (submitBatch asgToInfo)
-                now3 <- getCurrentTime
-                History.saveHistory (History.mergeSession now3 sessionCounts history)
-                if wantsMore then runBatch else pure ()
-
-          submitBatch asgToInfo subs = do
-            ts <- getCurrentTime
-            outcomes <- mapConcurrentlyN maxParallelSubmits (postReview ts) subs
-            now2     <- getCurrentTime
-            summary2 <- Api.getSummary t
-            as2      <- Api.getAvailableAssignments t now2 n
-            let details   = map (fmtSub asgToInfo) outcomes
-                succeeded = length [() | (_, Right _) <- outcomes]
-                failed    = length outcomes - succeeded
-                msg       = "Submitted " <> show succeeded
-                         <> (if failed == 0
-                              then ""
-                              else " (" <> show failed <> " failed)")
-                         <> ". Reviews available now: "
-                         <> show (Api.reviewsAvailableNow now2 summary2)
-            pure Tui.SubmitResult
-              { Tui.srMessage = msg
-              , Tui.srHasMore = not (null as2)
-              , Tui.srDetails = details
-              }
-
-          postReview ts s = do
-            r <- try (Api.createReview t
-                       (Tui.subAssignmentId s)
-                       (Tui.subWrongMeaning s)
-                       (Tui.subWrongReading s)
-                       ts) :: IO (Either SomeException Api.ReviewResult)
-            pure (s, r)
-
-      runBatch
+    Cli.Study studyOpts -> runStudy studyOpts
 
 fmtSub
   :: M.Map Api.AssignmentId (Api.Subject, Api.Assignment)
@@ -190,11 +291,50 @@ fmtSub asgToInfo (s, eResult) =
                          <> " r:" <> show (Tui.subWrongReading s) <> ")"
   in name <> "  " <> status <> stageSuffix
 
+-- | Like 'fmtSub', for a leech-only practice round: no WaniKani submission
+-- happened, so there is no ending SRS stage to report.
+fmtLeechPractice
+  :: M.Map Api.AssignmentId (Api.Subject, Api.Assignment)
+  -> Tui.Submission
+  -> String
+fmtLeechPractice asgToInfo s =
+  let wrongTotal = Tui.subWrongMeaning s + Tui.subWrongReading s
+      name =
+        case M.lookup (Tui.subAssignmentId s) asgToInfo of
+          Just (subj, _) -> subjLabel subj
+          Nothing        -> "assignment #" <> show (Tui.subAssignmentId s)
+      status
+        | wrongTotal == 0 = "correct"
+        | otherwise       = "incorrect"
+                         <> " (m:" <> show (Tui.subWrongMeaning s)
+                         <> " r:" <> show (Tui.subWrongReading s) <> ")"
+  in name <> "  " <> status
+
 shortErr :: SomeException -> String
 shortErr e =
   let msg     = displayException e
       oneLine = takeWhile (/= '\n') msg
   in if length oneLine > 120 then take 117 oneLine <> "..." else oneLine
+
+leechTotal :: History.LeechEntry -> Int
+leechTotal e = History.leWrongMeaning e + History.leWrongReading e
+
+fmtLeechRow :: TimeZone -> M.Map Api.SubjectId Api.Subject -> History.LeechEntry -> String
+fmtLeechRow tz subjMap e =
+  let sid   = History.leSubjectId e
+      label = case M.lookup sid subjMap of
+                Just s  -> subjLabel s
+                Nothing -> "subject #" <> show sid
+      lvl   = case M.lookup sid subjMap of
+                Just s  -> show (Api.subjLevel s)
+                Nothing -> "?"
+      lastSeen = formatTime defaultTimeLocale "%F %H:%M"
+                   (utcToLocalTime tz (History.leLastSeen e))
+  in strPadRight 26 label <> "  "
+  <> strPadLeft 3 lvl <> "  "
+  <> strPadLeft 7 (show (History.leWrongMeaning e)) <> "  "
+  <> strPadLeft 7 (show (History.leWrongReading e)) <> "  "
+  <> lastSeen
 
 subjLabel :: Api.Subject -> String
 subjLabel subj =
