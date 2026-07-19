@@ -42,6 +42,10 @@ import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 
 import qualified Data.ByteString.Char8 as BS8
 import Network.HTTP.Req
+import qualified Network.HTTP.Client as HC
+import Network.HTTP.Types (status429, status500, status502, status503, status504)
+import Control.Exception (SomeException, fromException)
+import Control.Retry (RetryPolicyM, RetryStatus, capDelay, exponentialBackoff, limitRetries)
 
 --------------------------------------------------------------------------------
 -- IDs
@@ -60,6 +64,7 @@ instance Show SubjectId    where show (SubjectId i)    = show i
 instance Show AssignmentId where show (AssignmentId i) = show i
 
 instance ToJSON SubjectId      where toJSON (SubjectId i)        = toJSON i
+instance ToJSON AssignmentId   where toJSON (AssignmentId i)     = toJSON i
 
 instance FromJSON SubjectId    where parseJSON v = SubjectId    <$> parseJSON v
 instance FromJSON AssignmentId where parseJSON v = AssignmentId <$> parseJSON v
@@ -73,6 +78,38 @@ apiOpts :: String -> Option scheme
 apiOpts token =
   header "Authorization" ("Bearer " <> BS8.pack token)
   <> header "Wanikani-Revision" "20170710"
+
+-- | 'defaultHttpConfig' does not retry anything on its own — both retry
+-- judges default to @const (const False)@. Every WaniKani call in this
+-- module uses this config instead: up to 4 retries, exponential backoff
+-- starting at 0.5s and capped at 8s per attempt, retrying only on genuinely
+-- transient failures (connection drops/timeouts, and 429/5xx responses) —
+-- never on 4xx like an expired token, where retrying can't help.
+apiRetryPolicy :: RetryPolicyM IO
+apiRetryPolicy = capDelay 8000000 (exponentialBackoff 500000) <> limitRetries 4
+
+apiRetryJudge :: RetryStatus -> HC.Response b -> Bool
+apiRetryJudge _ resp =
+  HC.responseStatus resp `elem`
+    [status429, status500, status502, status503, status504]
+
+apiRetryJudgeException :: RetryStatus -> SomeException -> Bool
+apiRetryJudgeException _ e = case fromException e of
+  Just (VanillaHttpException (HC.HttpExceptionRequest _ content)) -> case content of
+    HC.ResponseTimeout        -> True
+    HC.ConnectionTimeout      -> True
+    HC.ConnectionFailure _    -> True
+    HC.ConnectionClosed       -> True
+    HC.NoResponseDataReceived -> True
+    _                         -> False
+  _ -> False
+
+retryingHttpConfig :: HttpConfig
+retryingHttpConfig = defaultHttpConfig
+  { httpConfigRetryPolicy         = apiRetryPolicy
+  , httpConfigRetryJudge          = apiRetryJudge
+  , httpConfigRetryJudgeException = apiRetryJudgeException
+  }
 
 --------------------------------------------------------------------------------
 -- User
@@ -101,7 +138,7 @@ data KrokiError
 instance Exception KrokiError
 
 getUser :: String -> IO User
-getUser token = runReq defaultHttpConfig $ do
+getUser token = runReq retryingHttpConfig $ do
   resp <- req
     GET
     (https "api.wanikani.com" /: "v2" /: "user")
@@ -140,7 +177,7 @@ instance FromJSON ReviewBucket where
     ReviewBucket at <$> o .: "subject_ids"
 
 getSummary :: String -> IO Summary
-getSummary token = runReq defaultHttpConfig $ do
+getSummary token = runReq retryingHttpConfig $ do
   resp <- req
     GET
     (https "api.wanikani.com" /: "v2" /: "summary")
@@ -257,7 +294,7 @@ toAssignment (AssignmentData i s stage) =
   Assignment i s (srsStageFromInt stage)
 
 getAvailableAssignments :: String -> UTCTime -> Int -> IO [Assignment]
-getAvailableAssignments token now n = runReq defaultHttpConfig $ do
+getAvailableAssignments token now n = runReq retryingHttpConfig $ do
   let nowParam = T.pack (iso8601Show now)
 
   resp <- req
@@ -283,7 +320,7 @@ getAssignmentsBySubjectIds token ids =
   fmap concat $ mapM (getAssignmentChunk token) (chunkN 100 ids)
 
 getAssignmentChunk :: String -> [SubjectId] -> IO [Assignment]
-getAssignmentChunk token idsChunk = runReq defaultHttpConfig $ do
+getAssignmentChunk token idsChunk = runReq retryingHttpConfig $ do
   let idsParam = T.intercalate "," (map (T.pack . show . unSubjectId) idsChunk)
 
   resp <- req
@@ -409,7 +446,7 @@ getSubjectsByIds token ids = do
   fmap concat $ mapM (getChunk token) chunks
 
 getChunk :: String -> [SubjectId] -> IO [Subject]
-getChunk token idsChunk = runReq defaultHttpConfig $ do
+getChunk token idsChunk = runReq retryingHttpConfig $ do
   let idsParam = T.intercalate "," (map (T.pack . show . unSubjectId) idsChunk)
 
   resp <- req
@@ -448,7 +485,7 @@ instance FromJSON ReviewEnvelope where
 
 createReview :: String -> AssignmentId -> Int -> Int -> UTCTime -> IO ReviewResult
 createReview token assignmentId wrongMeaning wrongReading createdAt =
-  runReq defaultHttpConfig $ do
+  runReq retryingHttpConfig $ do
     let body =
           object
             [ "review" .= object

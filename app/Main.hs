@@ -4,6 +4,7 @@ import qualified Cli
 import qualified Api
 import qualified Config
 import qualified History
+import qualified PendingReviews
 import qualified Tui
 import Util (strPadLeft, strPadRight)
 
@@ -19,6 +20,7 @@ import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.List (nub, sortOn)
 import Data.Maybe (fromMaybe)
 import Data.Map.Strict qualified as M
+import qualified Data.Set as Set
 import qualified Data.Text as T
 
 main :: IO ()
@@ -146,9 +148,50 @@ main = do
         user <- Api.getUser t
         summary <- Api.getSummary t
 
+        -- Resubmit anything left over from a previous run's network trouble,
+        -- using each item's original 'prCreatedAt' (the review really
+        -- happened then, not now). Returns the assignment ids that are
+        -- still failing after this attempt, so this run's fresh batch
+        -- doesn't ask about them again.
+        let retryPendingReviews = do
+              pending <- PendingReviews.loadPendingReviews
+              if null pending
+                then pure Set.empty
+                else do
+                  outcomes <- mapConcurrentlyN maxParallelSubmits postPendingReview pending
+                  let stillFailing = [ p | (p, Left _) <- outcomes ]
+                      succeededN   = length outcomes - length stillFailing
+                  PendingReviews.savePendingReviews stillFailing
+                  putStrLn $
+                    "Retrying " <> show (length pending)
+                    <> " review(s) that failed to reach WaniKani last time: "
+                    <> show succeededN <> " succeeded"
+                    <> ( if null stillFailing
+                           then "."
+                           else ", " <> show (length stillFailing)
+                             <> " still failing (will retry again next run)."
+                       )
+                  pure (Set.fromList (map PendingReviews.prAssignmentId stillFailing))
+
+            postPendingReview p = do
+              r <- try (Api.createReview t
+                         (PendingReviews.prAssignmentId p)
+                         (PendingReviews.prWrongMeaning p)
+                         (PendingReviews.prWrongReading p)
+                         (PendingReviews.prCreatedAt p)) :: IO (Either SomeException Api.ReviewResult)
+              pure (p, r)
+
+        stillPendingIds <- retryPendingReviews
+
         let runBatch = do
               now2 <- getCurrentTime
-              as   <- Api.getAvailableAssignments t now2 n
+              asAll <- Api.getAvailableAssignments t now2 n
+              -- Assignments we already answered last run but couldn't submit
+              -- (still stuck in the pending file after retryPendingReviews)
+              -- stay "available" on WaniKani's side since they were never
+              -- recorded -- exclude them so this session doesn't ask again
+              -- for an answer it already has.
+              let as = filter (\a -> not (Api.asId a `Set.member` stillPendingIds)) asAll
               if null as
                 then putStrLn "No reviews available right now."
                 else do
@@ -198,21 +241,44 @@ main = do
             submitBatch asgToInfo subs = do
               ts <- getCurrentTime
               outcomes <- mapConcurrentlyN maxParallelSubmits (postReview ts) subs
-              now2     <- getCurrentTime
-              summary2 <- Api.getSummary t
-              as2      <- Api.getAvailableAssignments t now2 n
               let details   = map (fmtSub asgToInfo) outcomes
                   succeeded = length [() | (_, Right _) <- outcomes]
                   failed    = length outcomes - succeeded
-                  msg       = "Submitted " <> show succeeded
+                  submitMsg = "Submitted " <> show succeeded
                            <> (if failed == 0
                                 then ""
-                                else " (" <> show failed <> " failed)")
-                           <> ". Reviews available now: "
-                           <> show (Api.reviewsAvailableNow now2 summary2)
+                                else " (" <> show failed <> " failed, saved for automatic retry next run)")
+                  newlyFailed =
+                    [ PendingReviews.PendingReview (Tui.subAssignmentId s) (Tui.subWrongMeaning s) (Tui.subWrongReading s) ts
+                    | (s, Left _) <- outcomes
+                    ]
+              if null newlyFailed
+                then pure ()
+                else do
+                  existingPending <- PendingReviews.loadPendingReviews
+                  PendingReviews.savePendingReviews (PendingReviews.addPending existingPending newlyFailed)
+              now2 <- getCurrentTime
+              -- The reviews above are already posted; don't let a network
+              -- blip on this trailing status check throw away those
+              -- per-item results (that used to surface as a bare "submit
+              -- failed" with no details at all).
+              statusResult <- try (do
+                summary2 <- Api.getSummary t
+                as2      <- Api.getAvailableAssignments t now2 n
+                pure (summary2, as2)) :: IO (Either SomeException (Api.Summary, [Api.Assignment]))
+              let (msg, hasMore) = case statusResult of
+                    Right (summary2, as2) ->
+                      ( submitMsg <> ". Reviews available now: "
+                          <> show (Api.reviewsAvailableNow now2 summary2)
+                      , not (null as2)
+                      )
+                    Left e ->
+                      ( submitMsg <> ". (could not refresh review count: " <> shortErr e <> ")"
+                      , False
+                      )
               pure Tui.SubmitResult
                 { Tui.srMessage = msg
-                , Tui.srHasMore = not (null as2)
+                , Tui.srHasMore = hasMore
                 , Tui.srDetails = details
                 }
 

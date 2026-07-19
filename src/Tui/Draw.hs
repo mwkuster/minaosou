@@ -32,6 +32,7 @@ theMap = attrMap V.defAttr
   , (attrName "bad",     fg V.red)
   , (attrName "hint",    V.defAttr `V.withStyle` V.dim)
   , (attrName "bigchar", V.defAttr `V.withStyle` V.bold `V.withForeColor` V.brightYellow)
+  , (attrName "input",   V.defAttr `V.withForeColor` V.brightWhite)
   ]
 
 drawUi :: AppState -> [Widget Name]
@@ -55,9 +56,10 @@ drawQueue st =
       ]
 
 drawQueueItem :: Bool -> Q -> Widget Name
-drawQueueItem _ q =
+drawQueueItem sel q =
   let s = qSubject q
-  in str (displayItem s <> " [" <> kindLabel (qKind q) <> "]")
+      w = str (displayItem s <> " [" <> kindLabel (qKind q) <> "]")
+  in if sel then w else withAttr (attrName "hint") w
 
 drawMain :: AppState -> Widget Name
 drawMain st
@@ -133,9 +135,10 @@ drawMain st
                     txt (T.pack (displayTag (qSubject q) <> " — " <> kindLabel (qKind q)))
                 ]
             , padTop (Pad 1) $
-                B.borderWithLabel (str "Input") $
-                  padAll 1 $
-                    txt (displayInput (qKind q) (stInput st))
+                withAttr (attrName "input") $
+                  B.borderWithLabel (str "Input") $
+                    padAll 1 $
+                      txt (displayInput (qKind q) (stInput st))
             , padTop (Pad 1) $
                 drawMode st q
             ]
@@ -165,12 +168,14 @@ drawMode st q =
           mnemonic = case qKind q of
             QMeaning -> Api.subjMeaningMnemonic (qSubject q)
             QReading -> Api.subjReadingMnemonic (qSubject q)
-          compHints
+          (compLabel, compHints)
             | Api.subjType (qSubject q) `elem` [Api.Vocabulary, Api.KanaVocabulary]
             = case qKind q of
-                QReading -> componentKanjiReadings st (qSubject q)
-                QMeaning -> componentKanjiMeanings st (qSubject q)
-            | otherwise = []
+                QReading -> ("Kanji: ", componentKanjiReadings st (qSubject q))
+                QMeaning -> ("Kanji: ", componentKanjiMeanings st (qSubject q))
+            | Api.subjType (qSubject q) == Api.Kanji, QMeaning <- qKind q
+            = ("Radicals: ", componentRadicalMeanings st (qSubject q))
+            | otherwise = ("", [])
       in vBox $
         [ withAttr (attrName "bad") $
             txtWrap ("✗ you entered: " <> shownInput)
@@ -180,11 +185,11 @@ drawMode st q =
         ++ [ padTop (Pad 1) $ withAttr (attrName "bad") $ txtWrap ("⚠ " <> c)
            | Just c <- [confusionHint st q input]
            ]
-        ++ [ padTop (Pad 1) $ withAttr (attrName "hint") $
-               txtWrap ("Kanji: " <> T.intercalate "  ·  " compHints)
+        ++ [ padTop (Pad 1) $
+               txtWrap (compLabel <> T.intercalate "  ·  " compHints)
            | not (null compHints)
            ]
-        ++ [ padTop (Pad 1) $ withAttr (attrName "hint") $ txtWrap (stripWkTags m)
+        ++ [ padTop (Pad 1) $ txtWrap (stripWkTags m)
            | Just m <- [mnemonic]
            ]
 
@@ -238,6 +243,20 @@ componentKanjiMeanings st subj =
   | cid <- Api.subjComponentIds subj
   , Just c <- [M.lookup cid (stAllSubjects st)]
   , Api.subjType c == Api.Kanji
+  , let ms = Api.subjMeanings c
+  , not (null ms)
+  ]
+
+-- | For a kanji subject, the meanings of its component radicals, formatted
+-- as "部 (meaning, meaning)" — helps explain a wrong meaning answer by
+-- showing how the kanji meaning is built from its radicals, same info as
+-- the "Components:" section of the Ctrl-a all-info overlay.
+componentRadicalMeanings :: AppState -> Api.Subject -> [Text]
+componentRadicalMeanings st subj =
+  [ fromMaybe "?" (Api.subjChars c) <> " (" <> T.intercalate ", " ms <> ")"
+  | cid <- Api.subjComponentIds subj
+  , Just c <- [M.lookup cid (stAllSubjects st)]
+  , Api.subjType c == Api.Radical
   , let ms = Api.subjMeanings c
   , not (null ms)
   ]

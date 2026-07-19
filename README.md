@@ -27,9 +27,11 @@ A minimal terminal client for [WaniKani](https://www.wanikani.com/) — do your 
 - Optional pronunciation audio via an external player (Ctrl-p), with an opt-in auto-play on a reading question's first appearance (`audio_autoplay`)
 - Submits results back to WaniKani at the end of each batch; post-submit list shows the resulting SRS stage per item, with incorrect items highlighted
 - Configurable batch size (0 = all available reviews)
-- Wrong-answer screen auto-surfaces the relevant mnemonic, flags visually-similar-kanji mix-ups by name, and — for vocabulary — shows the component kanji and their meanings/readings; scrollable if it doesn't fit
+- Wrong-answer screen auto-surfaces the relevant mnemonic, flags visually-similar-kanji mix-ups by name, and shows the components that build the answer — component kanji and their meanings/readings for vocabulary, component radicals and their meanings for kanji; scrollable if it doesn't fit
 - End-of-session accuracy breakdown by subject type and SRS stage
 - Cross-session leech tracking (`kroki leeches`): lists subjects you keep getting wrong across sessions, and `kroki leeches --study` lets you drill them in a dedicated practice session that is never submitted to WaniKani
+- Colour scheme puts visual focus on the current answer rather than the queue: unselected queue items are dimmed, and the answer input is rendered at full brightness
+- Resilient submission: transient network failures (timeouts, dropped connections, 429/5xx) are retried automatically with backoff; a review that still fails to reach WaniKani is saved locally and retried automatically the next time you run `kroki`, without asking you to answer it again
 
 ## Installation
 
@@ -93,6 +95,12 @@ kroki init                   # (re)create config file interactively
 Every wrong answer is recorded locally in `~/.config/kroki/leeches.json`, since WaniKani's own SRS stage can't tell "just leveled up" from "keeps regressing across sessions." `kroki leeches` lists tracked subjects sorted by how often they've been missed.
 
 `kroki leeches --study` starts a normal-looking review session built from that list instead of WaniKani's "available reviews" — worst leeches first, batched by `batch_size` — but it never calls WaniKani's review API. Instead, each practice round replaces a leech's tracked counts: answer it cleanly and it drops off the list entirely (graduated); miss it again and its count resets to just that round's mistakes rather than piling on older history.
+
+### Submission reliability
+
+Every WaniKani API call retries automatically on transient failures — connection drops, timeouts, HTTP 429/5xx — with exponential backoff (up to 4 retries, capped at 8s per attempt). It never retries on a 4xx like an expired token, since that can't be fixed by trying again.
+
+If a review submission still fails after those retries (e.g. a longer outage), it's saved to `~/.config/kroki/pending_reviews.json` instead of being dropped. The next time you run `kroki study`, pending reviews are resubmitted first, using their original answer time; anything still stuck stays pending for the run after that. Since the assignment is still "available" on WaniKani until its review actually lands, a pending item is also excluded from that session's fresh batch, so you're never asked to re-answer something you already answered.
 
 ## TUI keybindings
 
