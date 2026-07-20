@@ -43,7 +43,7 @@ main = do
 
   let runLeechList t history = do
         tz <- getCurrentTimeZone
-        let entries = sortOn (negate . leechTotal) (M.elems history)
+        let entries = sortOn (negate . leechTotal) (M.elems (History.activeLeeches history))
         subjects <- Api.getSubjectsByIds t (map History.leSubjectId entries)
         let subjMap = M.fromList [ (Api.subjId s, s) | s <- subjects ]
 
@@ -69,7 +69,8 @@ main = do
             raw = fromMaybe 10 batchSize
             n   = if raw == 0 then maxBound else raw
             orderedIds = map History.leSubjectId
-                           (sortOn (negate . leechTotal) (M.elems initialHistory))
+                           (sortOn (negate . leechTotal)
+                             (M.elems (History.activeLeeches initialHistory)))
 
             loop history remainingIds
               | null remainingIds = pure ()
@@ -329,7 +330,7 @@ main = do
     Cli.Leeches leechOpts -> do
       t <- requireToken
       history <- History.loadHistory
-      if M.null history
+      if M.null (History.activeLeeches history)
         then putStrLn "No leeches tracked yet."
         else if Cli.leechesStudy leechOpts
           then runLeechStudy t history
@@ -383,7 +384,7 @@ shortErr e =
   in if length oneLine > 120 then take 117 oneLine <> "..." else oneLine
 
 leechTotal :: History.LeechEntry -> Int
-leechTotal e = History.leWrongMeaning e + History.leWrongReading e
+leechTotal = History.leechWeight
 
 fmtLeechRow :: TimeZone -> M.Map Api.SubjectId Api.Subject -> History.LeechEntry -> String
 fmtLeechRow tz subjMap e =

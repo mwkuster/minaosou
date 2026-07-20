@@ -12,12 +12,14 @@ module History
   , mergeSession
   , applyPracticeSession
   , historyCounts
+  , leechWeight
+  , activeLeeches
   ) where
 
 import qualified Api
 
 import Control.Exception (IOException, catch)
-import Data.Aeson (FromJSON(..), ToJSON(..), decode, encode, object, withObject, (.:), (.=))
+import Data.Aeson (FromJSON(..), ToJSON(..), decode, encode, object, withObject, (.:), (.:?), (.!=), (.=))
 import qualified Data.ByteString.Lazy as BL
 import Data.List (foldl')
 import qualified Data.Map.Strict as M
@@ -30,6 +32,15 @@ data LeechEntry = LeechEntry
   , leWrongMeaning :: Int
   , leWrongReading :: Int
   , leLastSeen     :: UTCTime
+  , leRetired      :: Bool
+    -- ^ Graduated out of active leech status via a clean
+    -- @kroki leeches --study@ round. Excluded from the leech list and from
+    -- future practice queues, but the record is kept (not deleted) so a
+    -- relapse can still be recognised.
+  , leRelapses     :: Int
+    -- ^ Times this subject was retired and then answered wrong again in a
+    -- real WaniKani review. Feeds 'leechWeight' so a relapsed leech ranks
+    -- above a fresh one with the same raw miss count.
   } deriving (Show, Eq)
 
 instance ToJSON LeechEntry where
@@ -38,6 +49,8 @@ instance ToJSON LeechEntry where
     , "wrong_meaning" .= leWrongMeaning e
     , "wrong_reading" .= leWrongReading e
     , "last_seen"     .= leLastSeen e
+    , "retired"       .= leRetired e
+    , "relapses"      .= leRelapses e
     ]
 
 instance FromJSON LeechEntry where
@@ -47,6 +60,8 @@ instance FromJSON LeechEntry where
       <*> o .: "wrong_meaning"
       <*> o .: "wrong_reading"
       <*> o .: "last_seen"
+      <*> o .:? "retired"  .!= False
+      <*> o .:? "relapses" .!= 0
 
 historyPath :: IO FilePath
 historyPath = do
@@ -76,6 +91,13 @@ saveHistory history = do
 -- | Add this session's wrong counts on top of existing entries, bumping
 -- last_seen to now. Only pass subjects with at least one wrong answer this
 -- session, so clean subjects never get a spurious zero-count entry.
+--
+-- A subject that was previously retired (graduated out of leech status via
+-- a clean practice round) but shows up here -- i.e. missed again in a real
+-- review -- is a relapse: it's un-retired immediately and 'leRelapses' is
+-- bumped, so 'leechWeight' ranks it above a first-time leech with the same
+-- raw miss count right away, rather than waiting for the miss count to
+-- climb back up on its own.
 mergeSession
   :: UTCTime
   -> [(Api.SubjectId, Int, Int)]
@@ -83,8 +105,16 @@ mergeSession
   -> M.Map Api.SubjectId LeechEntry
 mergeSession now sessionCounts existing = foldl' step existing sessionCounts
   where
-    step acc (sid, wm, wr) =
-      M.insertWith combine sid (LeechEntry sid wm wr now) acc
+    step acc (sid, wm, wr) = case M.lookup sid acc of
+      Just old | leRetired old ->
+        M.insert sid old
+          { leWrongMeaning = wm
+          , leWrongReading = wr
+          , leLastSeen     = now
+          , leRetired      = False
+          , leRelapses     = leRelapses old + 1
+          } acc
+      _ -> M.insertWith combine sid (LeechEntry sid wm wr now False 0) acc
       where
         combine new old = old
           { leWrongMeaning = leWrongMeaning old + leWrongMeaning new
@@ -92,14 +122,17 @@ mergeSession now sessionCounts existing = foldl' step existing sessionCounts
           , leLastSeen     = leLastSeen new
           }
 
--- | After a leech-only practice session ("kroki leeches --study"), replace
--- each practiced subject's entry instead of adding to it: dropped entirely
--- if answered fully correctly this round (it "graduated" out of leech
--- status), otherwise reset to just this round's mistakes. Unlike
--- 'mergeSession' (which accumulates real WaniKani review history forever,
--- since that's a record of actual SRS performance), practice performance
--- shouldn't pile indefinitely on top of past mistakes -- the whole point is
--- to let a leech drop off the list once it's clean.
+-- | After a leech-only practice session ("kroki leeches --study"), update
+-- each practiced subject's entry: answered fully correctly this round means
+-- it "graduated" -- retire it (excluded from the leech list and future
+-- practice queues) rather than deleting its record, so a later relapse in a
+-- real review (see 'mergeSession') can still be recognised and weighted.
+-- Otherwise (still missed), reset its counts to just this round's mistakes
+-- and make sure it's active. Unlike 'mergeSession' (which accumulates real
+-- WaniKani review history forever, since that's a record of actual SRS
+-- performance), practice performance shouldn't pile indefinitely on top of
+-- past mistakes -- the whole point is to let a leech drop off the active
+-- list once it's clean.
 applyPracticeSession
   :: UTCTime
   -> [Api.SubjectId]
@@ -111,8 +144,30 @@ applyPracticeSession now practiced sessionCounts existing =
   where
     wrongMap = M.fromList [ (sid, (wm, wr)) | (sid, wm, wr) <- sessionCounts ]
     step acc sid = case M.lookup sid wrongMap of
-      Nothing       -> M.delete sid acc
-      Just (wm, wr) -> M.insert sid (LeechEntry sid wm wr now) acc
+      Nothing ->
+        M.adjust (\e -> e { leRetired = True, leLastSeen = now }) sid acc
+      Just (wm, wr) ->
+        M.adjust
+          (\e -> e
+            { leWrongMeaning = wm
+            , leWrongReading = wr
+            , leLastSeen     = now
+            , leRetired      = False
+            })
+          sid acc
 
 historyCounts :: M.Map Api.SubjectId LeechEntry -> M.Map Api.SubjectId (Int, Int)
 historyCounts = M.map (\e -> (leWrongMeaning e, leWrongReading e))
+
+-- | Ranking weight for leech ordering (worst-first lists and practice
+-- queues): raw miss counts, plus a bonus per relapse so a subject that
+-- already graduated once and came back wrong outranks a fresh leech with
+-- the same raw miss count.
+leechWeight :: LeechEntry -> Int
+leechWeight e = leWrongMeaning e + leWrongReading e + relapseBonus * leRelapses e
+  where relapseBonus = 3
+
+-- | Entries not yet retired -- i.e. still due to be surfaced in
+-- @kroki leeches@ and practiced by @kroki leeches --study@.
+activeLeeches :: M.Map Api.SubjectId LeechEntry -> M.Map Api.SubjectId LeechEntry
+activeLeeches = M.filter (not . leRetired)

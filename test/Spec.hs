@@ -289,6 +289,8 @@ historySpec = describe "History" $ do
           , History.leWrongMeaning = 2
           , History.leWrongReading = 1
           , History.leLastSeen     = t1
+          , History.leRetired      = False
+          , History.leRelapses     = 0
           }
 
     it "round-trips through encode/decode" $
@@ -300,6 +302,12 @@ historySpec = describe "History" $ do
       fmap History.leSubjectId (decode json) `shouldBe` Just (Api.SubjectId 42)
       fmap History.leWrongMeaning (decode json) `shouldBe` Just 2
       fmap History.leWrongReading (decode json) `shouldBe` Just 1
+
+    it "defaults retired/relapses to False/0 for a pre-existing file missing those keys" $ do
+      let json :: ByteString
+          json = "{\"subject_id\":42,\"wrong_meaning\":2,\"wrong_reading\":1,\"last_seen\":\"2026-07-01T00:00:00Z\"}"
+      fmap History.leRetired (decode json) `shouldBe` Just False
+      fmap History.leRelapses (decode json) `shouldBe` Just 0
 
   describe "mergeSession" $ do
     it "adds a new entry for a subject missed for the first time" $ do
@@ -322,16 +330,38 @@ historySpec = describe "History" $ do
       History.historyCounts merged `shouldBe` M.fromList
         [ (Api.SubjectId 1, (1, 0)), (Api.SubjectId 2, (5, 0)) ]
 
+    it "un-retires and bumps leRelapses when a retired leech is wrong again in a real review" $ do
+      let graduated = History.applyPracticeSession t1 [Api.SubjectId 1] []
+                        (History.mergeSession t1 [(Api.SubjectId 1, 2, 0)] M.empty)
+          relapsed  = History.mergeSession t2 [(Api.SubjectId 1, 1, 0)] graduated
+          Just e    = M.lookup (Api.SubjectId 1) relapsed
+      History.leRetired e `shouldBe` False
+      History.leRelapses e `shouldBe` 1
+      History.historyCounts relapsed `shouldBe` M.singleton (Api.SubjectId 1) (1, 0)
+
+    it "gives a relapsed leech higher weight than a fresh leech with equal raw misses" $ do
+      let graduated    = History.applyPracticeSession t1 [Api.SubjectId 1] []
+                           (History.mergeSession t1 [(Api.SubjectId 1, 2, 0)] M.empty)
+          relapsed     = History.mergeSession t2 [(Api.SubjectId 1, 1, 0)] graduated
+          fresh        = History.mergeSession t2 [(Api.SubjectId 2, 1, 0)] M.empty
+          Just relapsedE = M.lookup (Api.SubjectId 1) relapsed
+          Just freshE    = M.lookup (Api.SubjectId 2) fresh
+      (History.leechWeight relapsedE > History.leechWeight freshE) `shouldBe` True
+
   describe "historyCounts" $
     it "projects to (meaning, reading) pairs" $ do
       let merged = History.mergeSession t1 [(Api.SubjectId 1, 3, 4)] M.empty
       History.historyCounts merged `shouldBe` M.singleton (Api.SubjectId 1) (3, 4)
 
   describe "applyPracticeSession" $ do
-    it "drops a leech answered fully correctly this round" $ do
+    it "retires (rather than drops) a leech answered fully correctly this round" $ do
       let existing = History.mergeSession t1 [(Api.SubjectId 1, 2, 1)] M.empty
           after    = History.applyPracticeSession t2 [Api.SubjectId 1] [] existing
-      History.historyCounts after `shouldBe` M.empty
+      -- record kept for relapse-tracking purposes, not deleted
+      History.historyCounts after `shouldBe` M.singleton (Api.SubjectId 1) (2, 1)
+      fmap History.leRetired (M.lookup (Api.SubjectId 1) after) `shouldBe` Just True
+      -- but excluded from the active leech list
+      M.null (History.activeLeeches after) `shouldBe` True
 
     it "resets (not adds) counts for a leech still missed this round" $ do
       let existing = History.mergeSession t1 [(Api.SubjectId 1, 5, 5)] M.empty
@@ -349,4 +379,8 @@ historySpec = describe "History" $ do
       let existing = History.mergeSession t1
                        [(Api.SubjectId 1, 1, 0), (Api.SubjectId 2, 3, 0)] M.empty
           after    = History.applyPracticeSession t2 [Api.SubjectId 1] [] existing
-      History.historyCounts after `shouldBe` M.singleton (Api.SubjectId 2) (3, 0)
+      -- subject 1 is retired (record kept) but subject 2's entry is untouched
+      History.historyCounts after `shouldBe` M.fromList
+        [ (Api.SubjectId 1, (1, 0)), (Api.SubjectId 2, (3, 0)) ]
+      History.historyCounts (History.activeLeeches after) `shouldBe`
+        M.singleton (Api.SubjectId 2) (3, 0)
