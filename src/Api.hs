@@ -20,6 +20,7 @@ module Api
   , Assignment(..)
   , getAvailableAssignments
   , getAssignmentsBySubjectIds
+  , PagedEnvelope(..)
 
   , SubjectType(..)
   , Subject(..)
@@ -46,6 +47,7 @@ import qualified Network.HTTP.Client as HC
 import Network.HTTP.Types (status429, status500, status502, status503, status504)
 import Control.Exception (SomeException, fromException)
 import Control.Retry (RetryPolicyM, RetryStatus, capDelay, exponentialBackoff, limitRetries)
+import Text.URI (mkURI)
 
 --------------------------------------------------------------------------------
 -- IDs
@@ -269,17 +271,28 @@ data Assignment = Assignment
   , asSrsStage  :: SrsStage
   } deriving (Show, Eq)
 
-newtype AssignmentsEnvelope = AssignmentsEnvelope { aeData :: [AssignmentData] } deriving (Show)
-
 data AssignmentData = AssignmentData
   { adId       :: AssignmentId
   , adSubject  :: SubjectId
   , adSrsStage :: Int
   } deriving (Show)
 
-instance FromJSON AssignmentsEnvelope where
-  parseJSON = withObject "AssignmentsEnvelope" $ \o ->
-    AssignmentsEnvelope <$> o .: "data"
+-- | A WaniKani "collection" response: the requested page of @data@, plus
+-- @pages.next_url@ if more pages remain. WaniKani paginates at up to 500
+-- items per page -- without following this, a request matching more than
+-- one page's worth of results (e.g. >500 overdue reviews) would silently
+-- return only the first page with no indication anything was cut off.
+data PagedEnvelope a = PagedEnvelope
+  { peData    :: [a]
+  , peNextUrl :: Maybe Text
+  } deriving (Show)
+
+instance FromJSON a => FromJSON (PagedEnvelope a) where
+  parseJSON = withObject "PagedEnvelope" $ \o -> do
+    d     <- o .: "data"
+    pages <- o .:? "pages"
+    next  <- maybe (pure Nothing) (.: "next_url") pages
+    pure (PagedEnvelope d next)
 
 instance FromJSON AssignmentData where
   parseJSON = withObject "AssignmentData" $ \o -> do
@@ -294,22 +307,47 @@ toAssignment (AssignmentData i s stage) =
   Assignment i s (srsStageFromInt stage)
 
 getAvailableAssignments :: String -> UTCTime -> Int -> IO [Assignment]
-getAvailableAssignments token now n = runReq retryingHttpConfig $ do
+getAvailableAssignments token now n = do
   let nowParam = T.pack (iso8601Show now)
 
-  resp <- req
-    GET
-    (https "api.wanikani.com" /: "v2" /: "assignments")
-    NoReqBody
-    jsonResponse
-    ( "available_before" =: nowParam
-   <> "in_review"        =: True
-   <> "hidden"           =: False
-   <> apiOpts token )
+  firstPage <- runReq retryingHttpConfig $ do
+    resp <- req
+      GET
+      (https "api.wanikani.com" /: "v2" /: "assignments")
+      NoReqBody
+      jsonResponse
+      ( "available_before" =: nowParam
+     <> "in_review"        =: True
+     <> "hidden"           =: False
+     <> apiOpts token )
+    pure (responseBody resp :: PagedEnvelope AssignmentData)
 
-  let env = responseBody resp :: AssignmentsEnvelope
-      as  = map toAssignment (aeData env)
-  pure (take n as)
+  as <- collectPages token n firstPage
+  pure (take n (map toAssignment as))
+
+-- | Keep following @pages.next_url@ (see 'PagedEnvelope') until either the
+-- requested count @n@ is reached or WaniKani reports no further pages.
+collectPages :: FromJSON a => String -> Int -> PagedEnvelope a -> IO [a]
+collectPages token n page
+  | length (peData page) >= n = pure (peData page)
+  | otherwise = case peNextUrl page of
+      Nothing  -> pure (peData page)
+      Just url -> do
+        nextPage <- fetchPage token url
+        rest <- collectPages token (n - length (peData page)) nextPage
+        pure (peData page ++ rest)
+
+-- | Fetch one collection page from an absolute URL (as found in
+-- @pages.next_url@), reusing the same auth/revision headers as the initial
+-- typed request.
+fetchPage :: FromJSON a => String -> Text -> IO (PagedEnvelope a)
+fetchPage token url = do
+  uri <- mkURI url
+  case useURI uri of
+    Just (Right (u, opts)) -> runReq retryingHttpConfig $ do
+      resp <- req GET u NoReqBody jsonResponse (opts <> apiOpts token)
+      pure (responseBody resp)
+    _ -> fail ("kroki: unexpected next_url, not an https URL: " <> T.unpack url)
 
 -- | Fetch assignments for specific subjects (regardless of review
 -- availability) -- used to show the current SRS stage for a fixed set of
@@ -330,8 +368,8 @@ getAssignmentChunk token idsChunk = runReq retryingHttpConfig $ do
     jsonResponse
     ( "subject_ids" =: idsParam <> apiOpts token )
 
-  let env = responseBody resp :: AssignmentsEnvelope
-  pure (map toAssignment (aeData env))
+  let env = responseBody resp :: PagedEnvelope AssignmentData
+  pure (map toAssignment (peData env))
 
 --------------------------------------------------------------------------------
 -- Subjects (to show prompts + accepted answers)

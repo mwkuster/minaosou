@@ -62,6 +62,7 @@ executable kroki
       , retry
       , http-client
       , http-types
+      , modern-uri
       , optparse-applicative
       , containers
       , time
@@ -91,6 +92,7 @@ test-suite kroki-test
       , retry
       , http-client
       , http-types
+      , modern-uri
       , time
       , directory
       , filepath

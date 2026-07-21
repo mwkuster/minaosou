@@ -80,26 +80,7 @@ main = do
                   tz  <- getCurrentTimeZone
 
                   leechSubjects <- Api.getSubjectsByIds t batchIds
-                  let compIds = nub [ cid | s <- leechSubjects, cid <- Api.subjComponentIds s ]
-                  compSubjects <- Api.getSubjectsByIds t compIds
-                  let amalgIds = nub
-                        [ aid
-                        | s <- leechSubjects
-                        , Api.subjType s == Api.Kanji
-                        , aid <- Api.subjAmalgamationIds s
-                        ]
-                  amalgSubjects <- Api.getSubjectsByIds t amalgIds
-                  let simIds = nub
-                        [ vid
-                        | s <- leechSubjects
-                        , Api.subjType s == Api.Kanji
-                        , vid <- Api.subjVisuallySimilarIds s
-                        ]
-                  simSubjects <- Api.getSubjectsByIds t simIds
-                  let allSubjMap = M.fromList
-                        [ (Api.subjId s, s)
-                        | s <- leechSubjects ++ compSubjects ++ amalgSubjects ++ simSubjects
-                        ]
+                  allSubjMap <- fetchSubjectContext t leechSubjects
                   asgs <- Api.getAssignmentsBySubjectIds t batchIds
                   let subjToAsg = M.fromList [ (Api.asSubjectId a, a) | a <- asgs ]
                       asgToInfo = M.fromList
@@ -199,27 +180,8 @@ main = do
                   let subjectIds = map Api.asSubjectId as
                       subjToAsg  = M.fromList [ (Api.asSubjectId a, a) | a <- as ]
                   subjects <- Api.getSubjectsByIds t subjectIds
-                  let compIds = nub [ cid | s <- subjects, cid <- Api.subjComponentIds s ]
-                  compSubjects <- Api.getSubjectsByIds t compIds
-                  let amalgIds = nub
-                        [ aid
-                        | s <- subjects
-                        , Api.subjType s == Api.Kanji
-                        , aid <- Api.subjAmalgamationIds s
-                        ]
-                  amalgSubjects <- Api.getSubjectsByIds t amalgIds
-                  let simIds = nub
-                        [ vid
-                        | s <- subjects
-                        , Api.subjType s == Api.Kanji
-                        , vid <- Api.subjVisuallySimilarIds s
-                        ]
-                  simSubjects <- Api.getSubjectsByIds t simIds
-                  let allSubjMap = M.fromList
-                        [ (Api.subjId s, s)
-                        | s <- subjects ++ compSubjects ++ amalgSubjects ++ simSubjects
-                        ]
-                      asgToInfo  = M.fromList
+                  allSubjMap <- fetchSubjectContext t subjects
+                  let asgToInfo  = M.fromList
                         [ (Api.asId asg, (subj, asg))
                         | subj <- subjects
                         , Just asg <- [M.lookup (Api.subjId subj) subjToAsg]
@@ -337,6 +299,35 @@ main = do
           else runLeechList t history
 
     Cli.Study studyOpts -> runStudy studyOpts
+
+-- | Fetch the extra subjects referenced by a batch of subjects being
+-- studied -- component kanji/radicals, vocabulary that uses a kanji, and
+-- visually-similar kanji -- and build a lookup map covering both the batch
+-- itself and everything referenced from it. Used to render the Ctrl-a
+-- overlay and wrong-answer hints; shared by a normal study batch and a
+-- leech practice round, which need identical reference data.
+fetchSubjectContext :: String -> [Api.Subject] -> IO (M.Map Api.SubjectId Api.Subject)
+fetchSubjectContext t subjects = do
+  let compIds = nub [ cid | s <- subjects, cid <- Api.subjComponentIds s ]
+  compSubjects <- Api.getSubjectsByIds t compIds
+  let amalgIds = nub
+        [ aid
+        | s <- subjects
+        , Api.subjType s == Api.Kanji
+        , aid <- Api.subjAmalgamationIds s
+        ]
+  amalgSubjects <- Api.getSubjectsByIds t amalgIds
+  let simIds = nub
+        [ vid
+        | s <- subjects
+        , Api.subjType s == Api.Kanji
+        , vid <- Api.subjVisuallySimilarIds s
+        ]
+  simSubjects <- Api.getSubjectsByIds t simIds
+  pure $ M.fromList
+    [ (Api.subjId s, s)
+    | s <- subjects ++ compSubjects ++ amalgSubjects ++ simSubjects
+    ]
 
 fmtSub
   :: M.Map Api.AssignmentId (Api.Subject, Api.Assignment)

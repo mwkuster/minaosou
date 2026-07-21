@@ -207,8 +207,7 @@ confusionHint st q input =
   in if Api.subjType subj /= Api.Kanji
        then Nothing
        else
-         let sims = mapMaybe (\vid -> M.lookup vid (stAllSubjects st))
-                              (Api.subjVisuallySimilarIds subj)
+         let sims = lookupSubjects st (Api.subjVisuallySimilarIds subj)
              matches = case qKind q of
                QMeaning ->
                  [ s | s <- sims, normMeaning input `elem` map normMeaning (Api.subjMeanings s) ]
@@ -221,45 +220,33 @@ confusionHint st q input =
                 <> T.pack (displayCore subj)
               [] -> Nothing
 
--- | For a vocabulary subject, the readings of its component kanji, formatted
--- as "字 (reading, reading)" — helps explain a wrong reading answer by
--- showing how the vocab reading is built from its kanji.
+-- | The subjects referenced by a list of subject IDs that are actually
+-- present in the loaded subject map (missing/never-fetched ids are dropped).
+lookupSubjects :: AppState -> [Api.SubjectId] -> [Api.Subject]
+lookupSubjects st = mapMaybe (\sid -> M.lookup sid (stAllSubjects st))
+
+-- | Component breakdown for a wrong-answer explanation, formatted as
+-- "字 (info, info)" per component — helps explain a wrong answer by showing
+-- how it's built from its components. Used for a vocabulary subject's
+-- component kanji (readings on a reading question, meanings on a meaning
+-- question) and a kanji subject's component radicals (meanings only).
+componentInfo :: (Api.Subject -> Bool) -> (Api.Subject -> [Text]) -> AppState -> Api.Subject -> [Text]
+componentInfo typeFilter fieldFn st subj =
+  [ fromMaybe "?" (Api.subjChars c) <> " (" <> T.intercalate ", " fs <> ")"
+  | c <- lookupSubjects st (Api.subjComponentIds subj)
+  , typeFilter c
+  , let fs = fieldFn c
+  , not (null fs)
+  ]
+
 componentKanjiReadings :: AppState -> Api.Subject -> [Text]
-componentKanjiReadings st subj =
-  [ fromMaybe "?" (Api.subjChars c) <> " (" <> T.intercalate ", " rs <> ")"
-  | cid <- Api.subjComponentIds subj
-  , Just c <- [M.lookup cid (stAllSubjects st)]
-  , Api.subjType c == Api.Kanji
-  , let rs = acceptedReadings c
-  , not (null rs)
-  ]
+componentKanjiReadings = componentInfo (\c -> Api.subjType c == Api.Kanji) acceptedReadings
 
--- | For a vocabulary subject, the meanings of its component kanji, formatted
--- as "字 (meaning, meaning)" — helps explain a wrong meaning answer by
--- showing how the vocab meaning is built from its kanji.
 componentKanjiMeanings :: AppState -> Api.Subject -> [Text]
-componentKanjiMeanings st subj =
-  [ fromMaybe "?" (Api.subjChars c) <> " (" <> T.intercalate ", " ms <> ")"
-  | cid <- Api.subjComponentIds subj
-  , Just c <- [M.lookup cid (stAllSubjects st)]
-  , Api.subjType c == Api.Kanji
-  , let ms = Api.subjMeanings c
-  , not (null ms)
-  ]
+componentKanjiMeanings = componentInfo (\c -> Api.subjType c == Api.Kanji) Api.subjMeanings
 
--- | For a kanji subject, the meanings of its component radicals, formatted
--- as "部 (meaning, meaning)" — helps explain a wrong meaning answer by
--- showing how the kanji meaning is built from its radicals, same info as
--- the "Components:" section of the Ctrl-a all-info overlay.
 componentRadicalMeanings :: AppState -> Api.Subject -> [Text]
-componentRadicalMeanings st subj =
-  [ fromMaybe "?" (Api.subjChars c) <> " (" <> T.intercalate ", " ms <> ")"
-  | cid <- Api.subjComponentIds subj
-  , Just c <- [M.lookup cid (stAllSubjects st)]
-  , Api.subjType c == Api.Radical
-  , let ms = Api.subjMeanings c
-  , not (null ms)
-  ]
+componentRadicalMeanings = componentInfo (\c -> Api.subjType c == Api.Radical) Api.subjMeanings
 
 -- | A submitted-review detail line, e.g. "字 (word)  incorrect (m:1 r:0) →
 -- Guru" — highlighted in the "bad" attr when it was answered incorrectly, so
@@ -337,8 +324,7 @@ drawAllInfo q st =
            else [ headerW ]
 
     compSection =
-      let comps = mapMaybe (\cid -> M.lookup cid (stAllSubjects st))
-                                      (Api.subjComponentIds subj)
+      let comps = lookupSubjects st (Api.subjComponentIds subj)
       in case comps of
            [] -> []
            cs -> str "Components:" : concatMap renderComponent cs ++ [str ""]
@@ -356,8 +342,7 @@ drawAllInfo q st =
     amalgSection =
       case Api.subjType subj of
         Api.Kanji ->
-          let vocabs = mapMaybe (\aid -> M.lookup aid (stAllSubjects st))
-                                          (Api.subjAmalgamationIds subj)
+          let vocabs = lookupSubjects st (Api.subjAmalgamationIds subj)
           in case vocabs of
                [] -> []
                vs -> str "Vocabulary:" : map renderAmalgamation vs ++ [str ""]
@@ -366,8 +351,7 @@ drawAllInfo q st =
     similarSection =
       case Api.subjType subj of
         Api.Kanji ->
-          let sims = mapMaybe (\vid -> M.lookup vid (stAllSubjects st))
-                                       (Api.subjVisuallySimilarIds subj)
+          let sims = lookupSubjects st (Api.subjVisuallySimilarIds subj)
           in case sims of
                [] -> []
                vs -> str "Visually similar:" : map renderAmalgamation vs ++ [str ""]

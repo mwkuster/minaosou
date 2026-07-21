@@ -219,6 +219,32 @@ apiSpec = describe "Api JSON parsing" $ do
       (decode "{\"available_at\":\"not-a-date\",\"subject_ids\":[]}" :: Maybe Api.ReviewBucket)
         `shouldBe` Nothing
 
+  describe "PagedEnvelope" $ do
+    let withNextUrl :: ByteString
+        withNextUrl =
+          "{\"data\":[1,2,3],\"pages\":{\"next_url\":\"https://api.wanikani.com/v2/assignments?page_after_id=3\",\"per_page\":500}}"
+        withoutNextUrl :: ByteString
+        withoutNextUrl =
+          "{\"data\":[1,2,3],\"pages\":{\"next_url\":null,\"per_page\":500}}"
+        noPagesKey :: ByteString
+        noPagesKey = "{\"data\":[1,2,3]}"
+
+    it "parses data" $
+      fmap Api.peData (decode withNextUrl :: Maybe (Api.PagedEnvelope Int))
+        `shouldBe` Just [1, 2, 3]
+
+    it "parses a present next_url" $
+      fmap Api.peNextUrl (decode withNextUrl :: Maybe (Api.PagedEnvelope Int))
+        `shouldBe` Just (Just "https://api.wanikani.com/v2/assignments?page_after_id=3")
+
+    it "parses a null next_url as Nothing" $
+      fmap Api.peNextUrl (decode withoutNextUrl :: Maybe (Api.PagedEnvelope Int))
+        `shouldBe` Just Nothing
+
+    it "defaults to Nothing when the pages key itself is absent" $
+      fmap Api.peNextUrl (decode noPagesKey :: Maybe (Api.PagedEnvelope Int))
+        `shouldBe` Just Nothing
+
   describe "Subject (kanji)" $ do
     -- WaniKani omits absent optional fields rather than sending null;
     -- aeson's .:? only yields Nothing for absent keys, not for null values

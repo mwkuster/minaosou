@@ -118,47 +118,60 @@ handleOverlay ev =
                  NoOverlay      -> error "scroll called with NoOverlay"
       vScrollBy vp n
 
+-- | Ctrl-key actions shared between the Normal and WrongAnswer input modes:
+-- override/requeue the current question, play audio, open an overlay or the
+-- review schedule, and scroll the current-question viewport. 'Nothing' means
+-- the event isn't one of these, so the caller falls through to its
+-- mode-specific handling (answer submission vs. requeue-as-wrong, etc).
+handleSharedCtrlKeys :: IO (UTCTime, Api.Summary) -> V.Event -> Maybe (EventM Name AppState ())
+handleSharedCtrlKeys refreshFn ev = case ev of
+  V.EvKey (V.KChar 'o') [V.MCtrl] -> Just $ do
+    st <- get
+    case currentQuestion st of
+      Nothing -> pure ()
+      Just q  -> put (advanceOverride q st) >> resetMainScroll
+
+  V.EvKey (V.KChar 'r') [V.MCtrl] -> Just $ do
+    st <- get
+    case currentQuestion st of
+      Nothing -> pure ()
+      Just q  -> put (requeueOnly q st) >> resetMainScroll
+
+  V.EvKey (V.KChar 'p') [V.MCtrl] -> Just $ do
+    st <- get
+    case currentQuestion st of
+      Just q | hasAudio q st -> liftIO $ playAudio (stAudioPlayer st) (qSubject q)
+      _ -> pure ()
+
+  V.EvKey (V.KChar 'a') [V.MCtrl] -> Just $
+    modify $ \st -> st { stOverlay = AllInfo }
+  V.EvKey (V.KChar 'u') [V.MCtrl] -> Just $
+    modify $ \st -> st { stOverlay = UserInfo }
+  V.EvKey (V.KChar 'v') [V.MCtrl] -> Just $ openReviewSchedule refreshFn
+
+  V.EvKey V.KUp []   -> Just $ vScrollBy (viewportScroll MainViewport) (-1)
+  V.EvKey V.KDown [] -> Just $ vScrollBy (viewportScroll MainViewport) 1
+
+  _ -> Nothing
+  where
+    resetMainScroll = vScrollToBeginning (viewportScroll MainViewport)
+
 handleWrongAnswer :: IO (UTCTime, Api.Summary) -> V.Event -> EventM Name AppState ()
 handleWrongAnswer refreshFn ev =
-  case ev of
-    V.EvKey (V.KChar 'o') [V.MCtrl] -> do
-      st <- get
-      case currentQuestion st of
-        Nothing -> pure ()
-        Just q  -> put (advanceOverride q st { stMode = Normal }) >> resetMainScroll
+  case handleSharedCtrlKeys refreshFn ev of
+    Just action -> action
+    Nothing -> case ev of
+      V.EvKey V.KEnter [] -> do
+        st <- get
+        case currentQuestion st of
+          Nothing -> pure ()
+          Just q  -> put (requeueWrong q st) >> resetMainScroll
 
-    V.EvKey (V.KChar 'r') [V.MCtrl] -> do
-      st <- get
-      case currentQuestion st of
-        Nothing -> pure ()
-        Just q  -> put (requeueOnly q st { stMode = Normal }) >> resetMainScroll
+      V.EvKey V.KEsc [] -> do
+        st <- get
+        put st { stMode = Normal } >> resetMainScroll
 
-    V.EvKey (V.KChar 'p') [V.MCtrl] -> do
-      st <- get
-      case currentQuestion st of
-        Just q | hasAudio q st -> liftIO $ playAudio (stAudioPlayer st) (qSubject q)
-        _ -> pure ()
-
-    V.EvKey (V.KChar 'a') [V.MCtrl] ->
-      modify $ \st -> st { stOverlay = AllInfo }
-    V.EvKey (V.KChar 'u') [V.MCtrl] ->
-      modify $ \st -> st { stOverlay = UserInfo }
-    V.EvKey (V.KChar 'v') [V.MCtrl] -> openReviewSchedule refreshFn
-
-    V.EvKey V.KEnter [] -> do
-      st <- get
-      case currentQuestion st of
-        Nothing -> pure ()
-        Just q  -> put (requeueWrong q st { stMode = Normal }) >> resetMainScroll
-
-    V.EvKey V.KEsc [] -> do
-      st <- get
-      put st { stMode = Normal } >> resetMainScroll
-
-    V.EvKey V.KUp []   -> vScrollBy (viewportScroll MainViewport) (-1)
-    V.EvKey V.KDown [] -> vScrollBy (viewportScroll MainViewport) 1
-
-    _ -> pure ()
+      _ -> pure ()
   where
     resetMainScroll = vScrollToBeginning (viewportScroll MainViewport)
 
@@ -216,71 +229,39 @@ handleFinished refreshFn ev =
 
 handleNormal :: IO (UTCTime, Api.Summary) -> V.Event -> EventM Name AppState ()
 handleNormal refreshFn ev =
-  case ev of
-    V.EvKey (V.KChar 'q') [V.MCtrl] ->
-      halt
+  case handleSharedCtrlKeys refreshFn ev of
+    Just action -> action
+    Nothing -> case ev of
+      V.EvKey (V.KChar 'q') [V.MCtrl] ->
+        halt
 
-    V.EvKey (V.KChar 'o') [V.MCtrl] -> do
-      st <- get
-      case currentQuestion st of
-        Nothing -> pure ()
-        Just q  -> put (advanceOverride q st) >> resetMainScroll
+      V.EvKey V.KEsc [] ->
+        halt
 
-    V.EvKey (V.KChar 'r') [V.MCtrl] -> do
-      st <- get
-      case currentQuestion st of
-        Nothing -> pure ()
-        Just q  -> put (requeueOnly q st) >> resetMainScroll
+      V.EvKey V.KEnter [] -> do
+        st <- get
+        case currentQuestion st of
+          Nothing -> pure ()
+          Just q  ->
+            let ans = T.strip (stInput st)
+            in if T.null ans then pure () else put (submitAnswer q ans st) >> resetMainScroll
 
-    V.EvKey (V.KChar 'p') [V.MCtrl] -> do
-      st <- get
-      case currentQuestion st of
-        Just q | hasAudio q st -> liftIO $ playAudio (stAudioPlayer st) (qSubject q)
-        _ -> pure ()
+      V.EvKey k [] | k `elem` [V.KBS, V.KDel] -> do
+        st <- get
+        put st
+          { stInput = if T.null (stInput st) then T.empty else T.init (stInput st)
+          , stMode  = Normal
+          }
 
-    V.EvKey (V.KChar 'a') [V.MCtrl] ->
-      modify $ \st -> st { stOverlay = AllInfo }
-    V.EvKey (V.KChar 'u') [V.MCtrl] ->
-      modify $ \st -> st { stOverlay = UserInfo }
-    V.EvKey (V.KChar 'v') [V.MCtrl] -> openReviewSchedule refreshFn
+      V.EvKey (V.KChar c) [] -> do
+        st <- get
+        put st
+          { stInput = stInput st <> T.singleton c
+          , stMode  = Normal
+          , stError = Nothing
+          }
 
-    V.EvKey V.KEsc [] ->
-      halt
-
-    V.EvKey V.KEnter [] -> do
-      st <- get
-      case currentQuestion st of
-        Nothing -> pure ()
-        Just q  ->
-          let ans = T.strip (stInput st)
-          in if T.null ans then pure () else put (submitAnswer q ans st) >> resetMainScroll
-
-    V.EvKey V.KBS [] -> do
-      st <- get
-      put st
-        { stInput = if T.null (stInput st) then T.empty else T.init (stInput st)
-        , stMode  = Normal
-        }
-
-    V.EvKey V.KDel [] -> do
-      st <- get
-      put st
-        { stInput = if T.null (stInput st) then T.empty else T.init (stInput st)
-        , stMode  = Normal
-        }
-
-    V.EvKey (V.KChar c) [] -> do
-      st <- get
-      put st
-        { stInput = stInput st <> T.singleton c
-        , stMode  = Normal
-        , stError = Nothing
-        }
-
-    V.EvKey V.KUp []   -> vScrollBy (viewportScroll MainViewport) (-1)
-    V.EvKey V.KDown [] -> vScrollBy (viewportScroll MainViewport) 1
-
-    _ -> pure ()
+      _ -> pure ()
   where
     resetMainScroll = vScrollToBeginning (viewportScroll MainViewport)
 
