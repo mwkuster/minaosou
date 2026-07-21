@@ -94,7 +94,9 @@ kroki init                   # (re)create config file interactively
 
 Every wrong answer is recorded locally in `~/.config/kroki/leeches.json`, since WaniKani's own SRS stage can't tell "just leveled up" from "keeps regressing across sessions." `kroki leeches` lists tracked subjects sorted by how often they've been missed.
 
-`kroki leeches --study` starts a normal-looking review session built from that list instead of WaniKani's "available reviews" — worst leeches first, batched by `batch_size` — but it never calls WaniKani's review API. Instead, each practice round replaces a leech's tracked counts: answer it cleanly and it drops off the list entirely (graduated); miss it again and its count resets to just that round's mistakes rather than piling on older history.
+`kroki leeches --study` starts a normal-looking review session built from that list instead of WaniKani's "available reviews" — worst leeches first, batched by `batch_size` — but it never calls WaniKani's review API. Instead, each practice round replaces a leech's tracked counts: answer it cleanly and it's retired — no longer shown in `kroki leeches` or drilled by `--study` — while missing it again resets its count to just that round's mistakes rather than piling on older history.
+
+Retiring a leech doesn't erase its record, though: if it ever comes up wrong again in a *real* WaniKani review, it's immediately un-retired and weighted higher than a fresh leech with the same miss count, so a relapsed item gets prioritized for practice sooner than one you're missing for the first time.
 
 ### Submission reliability
 
