@@ -91,7 +91,7 @@ initConfig = do
 
 writeConfigInteractive :: FilePath -> FilePath -> KrokiConfig -> IO ()
 writeConfigInteractive dir path existing = do
-  token      <- prompt "WaniKani API token (required)" Nothing
+  token      <- promptToken (cfgToken existing)
   batchSize  <- prompt "Batch size (0 = all available)" (Just (maybe (show defaultBatchSize)  show (cfgBatchSize existing)))
   requeueAft <- prompt "Requeue after (positions)" (Just (maybe (show defaultRequeueAfter) show (cfgRequeueAfter existing)))
   audioPlay  <- prompt "Audio player command (leave empty to disable)" (cfgAudioPlayer existing)
@@ -111,6 +111,26 @@ writeConfigInteractive dir path existing = do
   createDirectoryIfMissing True dir
   writeFile path content
   putStrLn ("Config written to: " <> path)
+
+-- | Prompt for the API token. Unlike other fields, an existing token is
+-- never echoed back (a secret shouldn't be shown on screen unnecessarily) --
+-- pressing Enter just keeps it as-is. If there's no existing token to fall
+-- back on, an empty answer would silently write an unusable config, so
+-- re-prompt instead of accepting it.
+promptToken :: Maybe String -> IO String
+promptToken existing = do
+  let hint = case existing of
+               Just _  -> " [keep existing]"
+               Nothing -> ""
+  putStr ("WaniKani API token (required)" <> hint <> ": ")
+  hFlush stdout
+  input <- getLine
+  case (trim input, existing) of
+    ("", Just t)  -> pure t
+    ("", Nothing) -> do
+      putStrLn "A token is required."
+      promptToken existing
+    (v, _)        -> pure v
 
 -- | Prompt the user for a value. Shows the default in brackets; Enter accepts it.
 prompt :: String -> Maybe String -> IO String

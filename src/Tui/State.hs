@@ -12,6 +12,7 @@ module Tui.State
   , AppEvent(..)
   , Progress(..)
   , AppState(..)
+  , StudyConfig(..)
 
     -- Session logic
   , currentQuestion
@@ -91,6 +92,17 @@ data SubmitResult = SubmitResult
   , srHasMore :: Bool
   , srDetails :: [String]   -- per-submission lines for TUI display
   } deriving (Show)
+
+-- | Session-wide settings for 'Tui.runStudyTui', grouped into one record so
+-- a new setting doesn't grow the function's positional-argument list
+-- further and similarly-typed flags (several 'Bool's) can't be swapped by
+-- position at a call site.
+data StudyConfig = StudyConfig
+  { scRequeueAfter  :: Int
+  , scAudioPlayer   :: Maybe String
+  , scAudioAutoplay :: Bool
+  , scPracticeOnly  :: Bool
+  } deriving (Show, Eq)
 
 data Progress = Progress
   { pMeaningOk     :: Bool

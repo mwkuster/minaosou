@@ -15,7 +15,7 @@ import Control.Exception (SomeException, bracket_, displayException, try)
 import System.Environment (lookupEnv)
 import System.Exit (die)
 
-import Data.Time (getCurrentTime, getCurrentTimeZone, utcToLocalTime, TimeZone)
+import Data.Time (getCurrentTime, getCurrentTimeZone, utcToLocalTime, TimeZone, UTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.List (nub, sortOn)
 import Data.Maybe (fromMaybe)
@@ -101,9 +101,15 @@ main = do
                           }
 
                   (wantsMore, sessionCounts) <-
-                    Tui.runStudyTui rqAfter audioPlayer audioAutoplay user summary0 now tz
-                                    allSubjMap subjToAsg priorWrong leechSubjects True
-                                    refreshSummary submitPractice
+                    Tui.runStudyTui
+                      Tui.StudyConfig
+                        { Tui.scRequeueAfter  = rqAfter
+                        , Tui.scAudioPlayer   = audioPlayer
+                        , Tui.scAudioAutoplay = audioAutoplay
+                        , Tui.scPracticeOnly  = True
+                        }
+                      user summary0 now tz allSubjMap subjToAsg priorWrong leechSubjects
+                      refreshSummary submitPractice
                   now2 <- getCurrentTime
                   let history' = History.applyPracticeSession now2 batchIds sessionCounts history
                   History.saveHistory history'
@@ -156,11 +162,11 @@ main = do
                   pure (Set.fromList (map PendingReviews.prAssignmentId stillFailing))
 
             postPendingReview p = do
-              r <- try (Api.createReview t
-                         (PendingReviews.prAssignmentId p)
-                         (PendingReviews.prWrongMeaning p)
-                         (PendingReviews.prWrongReading p)
-                         (PendingReviews.prCreatedAt p)) :: IO (Either SomeException Api.ReviewResult)
+              r <- tryCreateReview t
+                     (PendingReviews.prAssignmentId p)
+                     (PendingReviews.prWrongMeaning p)
+                     (PendingReviews.prWrongReading p)
+                     (PendingReviews.prCreatedAt p)
               pure (p, r)
 
         stillPendingIds <- retryPendingReviews
@@ -194,9 +200,15 @@ main = do
                   history <- History.loadHistory
                   let priorWrong = History.historyCounts history
                   (wantsMore, sessionCounts) <-
-                    Tui.runStudyTui rqAfter audioPlayer audioAutoplay user summary now tz
-                                    allSubjMap subjToAsg priorWrong subjects False
-                                    refreshSummary (submitBatch asgToInfo)
+                    Tui.runStudyTui
+                      Tui.StudyConfig
+                        { Tui.scRequeueAfter  = rqAfter
+                        , Tui.scAudioPlayer   = audioPlayer
+                        , Tui.scAudioAutoplay = audioAutoplay
+                        , Tui.scPracticeOnly  = False
+                        }
+                      user summary now tz allSubjMap subjToAsg priorWrong subjects
+                      refreshSummary (submitBatch asgToInfo)
                   now3 <- getCurrentTime
                   History.saveHistory (History.mergeSession now3 sessionCounts history)
                   if wantsMore then runBatch else pure ()
@@ -246,11 +258,11 @@ main = do
                 }
 
             postReview ts s = do
-              r <- try (Api.createReview t
-                         (Tui.subAssignmentId s)
-                         (Tui.subWrongMeaning s)
-                         (Tui.subWrongReading s)
-                         ts) :: IO (Either SomeException Api.ReviewResult)
+              r <- tryCreateReview t
+                     (Tui.subAssignmentId s)
+                     (Tui.subWrongMeaning s)
+                     (Tui.subWrongReading s)
+                     ts
               pure (s, r)
 
         runBatch
@@ -329,33 +341,20 @@ fetchSubjectContext t subjects = do
     | s <- subjects ++ compSubjects ++ amalgSubjects ++ simSubjects
     ]
 
-fmtSub
-  :: M.Map Api.AssignmentId (Api.Subject, Api.Assignment)
-  -> (Tui.Submission, Either SomeException Api.ReviewResult)
-  -> String
-fmtSub asgToInfo (s, eResult) =
-  let wrongTotal = Tui.subWrongMeaning s + Tui.subWrongReading s
-      name =
-        case M.lookup (Tui.subAssignmentId s) asgToInfo of
-          Just (subj, _) -> subjLabel subj
-          Nothing        -> "assignment #" <> show (Tui.subAssignmentId s)
-      stageSuffix = case eResult of
-        Right rr -> " → " <> Api.srsStageLabel (Api.rrEndingSrsStage rr)
-        Left  e  -> " (failed: " <> shortErr e <> ")"
-      status
-        | wrongTotal == 0 = "correct"
-        | otherwise       = "incorrect"
-                         <> " (m:" <> show (Tui.subWrongMeaning s)
-                         <> " r:" <> show (Tui.subWrongReading s) <> ")"
-  in name <> "  " <> status <> stageSuffix
+-- | 'Api.createReview', caught: shared by a fresh batch submission
+-- ('postReview') and a resubmit of a previously-failed one
+-- ('postPendingReview'), which differ only in where the four arguments
+-- come from ('Tui.Submission' vs. 'PendingReviews.PendingReview').
+tryCreateReview :: String -> Api.AssignmentId -> Int -> Int -> UTCTime -> IO (Either SomeException Api.ReviewResult)
+tryCreateReview t assignmentId wrongMeaning wrongReading createdAt =
+  try (Api.createReview t assignmentId wrongMeaning wrongReading createdAt)
 
--- | Like 'fmtSub', for a leech-only practice round: no WaniKani submission
--- happened, so there is no ending SRS stage to report.
-fmtLeechPractice
-  :: M.Map Api.AssignmentId (Api.Subject, Api.Assignment)
-  -> Tui.Submission
-  -> String
-fmtLeechPractice asgToInfo s =
+-- | "name  status" for a submission, e.g. "字 (word)  incorrect (m:1 r:0)".
+-- Shared base for 'fmtSub' (appends the resulting WaniKani SRS stage) and
+-- 'fmtLeechPractice' (a practice round has no WaniKani submission, so
+-- nothing to append).
+fmtSubBase :: M.Map Api.AssignmentId (Api.Subject, Api.Assignment) -> Tui.Submission -> String
+fmtSubBase asgToInfo s =
   let wrongTotal = Tui.subWrongMeaning s + Tui.subWrongReading s
       name =
         case M.lookup (Tui.subAssignmentId s) asgToInfo of
@@ -367,6 +366,25 @@ fmtLeechPractice asgToInfo s =
                          <> " (m:" <> show (Tui.subWrongMeaning s)
                          <> " r:" <> show (Tui.subWrongReading s) <> ")"
   in name <> "  " <> status
+
+fmtSub
+  :: M.Map Api.AssignmentId (Api.Subject, Api.Assignment)
+  -> (Tui.Submission, Either SomeException Api.ReviewResult)
+  -> String
+fmtSub asgToInfo (s, eResult) =
+  fmtSubBase asgToInfo s <> stageSuffix
+  where
+    stageSuffix = case eResult of
+      Right rr -> " → " <> Api.srsStageLabel (Api.rrEndingSrsStage rr)
+      Left  e  -> " (failed: " <> shortErr e <> ")"
+
+-- | Like 'fmtSub', for a leech-only practice round: no WaniKani submission
+-- happened, so there is no ending SRS stage to report.
+fmtLeechPractice
+  :: M.Map Api.AssignmentId (Api.Subject, Api.Assignment)
+  -> Tui.Submission
+  -> String
+fmtLeechPractice = fmtSubBase
 
 shortErr :: SomeException -> String
 shortErr e =

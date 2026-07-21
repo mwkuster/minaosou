@@ -1,3 +1,4 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Api
@@ -29,11 +30,9 @@ module Api
   , createReview
   ) where
 
-import Control.Exception (Exception)
-import Data.Aeson (FromJSON(..), ToJSON(..), (.:), (.:?), Object, withObject)
+import Data.Aeson (FromJSON(..), ToJSON(..), Object, object, withObject, (.:), (.:?), (.=))
 import Data.Aeson.Types (Parser)
 import qualified Data.Aeson.Key as Key
-import Data.Aeson (object, (.=))
 import Data.List (sortOn)
 import Data.Maybe (catMaybes, fromMaybe)
 import Data.Text (Text)
@@ -132,12 +131,6 @@ newtype UserEnvelope = UserEnvelope { ueData :: User } deriving (Show, Eq)
 instance FromJSON UserEnvelope where
   parseJSON = withObject "UserEnvelope" $ \o ->
     UserEnvelope <$> o .: "data"
-
-data KrokiError
-  = ApiDecodeError Text
-  deriving (Show)
-
-instance Exception KrokiError
 
 getUser :: String -> IO User
 getUser token = runReq retryingHttpConfig $ do
@@ -355,21 +348,8 @@ fetchPage token url = do
 -- 'getSubjectsByIds' to avoid huge URLs.
 getAssignmentsBySubjectIds :: String -> [SubjectId] -> IO [Assignment]
 getAssignmentsBySubjectIds token ids =
-  fmap concat $ mapM (getAssignmentChunk token) (chunkN 100 ids)
-
-getAssignmentChunk :: String -> [SubjectId] -> IO [Assignment]
-getAssignmentChunk token idsChunk = runReq retryingHttpConfig $ do
-  let idsParam = T.intercalate "," (map (T.pack . show . unSubjectId) idsChunk)
-
-  resp <- req
-    GET
-    (https "api.wanikani.com" /: "v2" /: "assignments")
-    NoReqBody
-    jsonResponse
-    ( "subject_ids" =: idsParam <> apiOpts token )
-
-  let env = responseBody resp :: PagedEnvelope AssignmentData
-  pure (map toAssignment (peData env))
+  map toAssignment
+    <$> fetchBySubjectIdsChunked token (https "api.wanikani.com" /: "v2" /: "assignments") "subject_ids" ids
 
 --------------------------------------------------------------------------------
 -- Subjects (to show prompts + accepted answers)
@@ -392,12 +372,6 @@ data Subject = Subject
   , subjAmalgamationIds  :: [SubjectId]  -- vocab for kanji; kanji for radical
   , subjVisuallySimilarIds :: [SubjectId] -- visually similar kanji (kanji only)
   } deriving (Show, Eq)
-
-newtype SubjectsEnvelope = SubjectsEnvelope { suData :: [Subject] } deriving (Show)
-
-instance FromJSON SubjectsEnvelope where
-  parseJSON = withObject "SubjectsEnvelope" $ \o ->
-    SubjectsEnvelope <$> o .: "data"
 
 newtype PronAudio = PronAudio { paUrl :: Text }
 
@@ -467,7 +441,7 @@ parseAccepted :: Text -> [AesonObj] -> Parser [Text]
 parseAccepted field xs =
   fmap catMaybes $ mapM (acceptedFrom field) xs
 
-type AesonObj = Data.Aeson.Object
+type AesonObj = Object
 
 acceptedFrom :: Text -> AesonObj -> Parser (Maybe Text)
 acceptedFrom field o = do
@@ -479,23 +453,30 @@ acceptedFrom field o = do
 
 -- Fetch subjects by IDs; chunk to avoid huge URLs.
 getSubjectsByIds :: String -> [SubjectId] -> IO [Subject]
-getSubjectsByIds token ids = do
-  let chunks = chunkN 100 ids
-  fmap concat $ mapM (getChunk token) chunks
+getSubjectsByIds token = fetchBySubjectIdsChunked token (https "api.wanikani.com" /: "v2" /: "subjects") "ids"
 
-getChunk :: String -> [SubjectId] -> IO [Subject]
-getChunk token idsChunk = runReq retryingHttpConfig $ do
+-- | Fetch a resource keyed by subject id, chunked into groups of 100 to
+-- avoid overlong URLs. Shared by 'getSubjectsByIds' and
+-- 'getAssignmentsBySubjectIds', which differ only in the endpoint and the
+-- query parameter name carrying the id list. Each chunk requests exactly
+-- 100 specific ids, so (unlike 'getAvailableAssignments') the response
+-- always fits in a single page.
+fetchBySubjectIdsChunked :: FromJSON a => String -> Url 'Https -> Text -> [SubjectId] -> IO [a]
+fetchBySubjectIdsChunked token endpoint paramName ids =
+  fmap concat $ mapM (fetchChunk token endpoint paramName) (chunkN 100 ids)
+
+fetchChunk :: FromJSON a => String -> Url 'Https -> Text -> [SubjectId] -> IO [a]
+fetchChunk token endpoint paramName idsChunk = runReq retryingHttpConfig $ do
   let idsParam = T.intercalate "," (map (T.pack . show . unSubjectId) idsChunk)
 
   resp <- req
     GET
-    (https "api.wanikani.com" /: "v2" /: "subjects")
+    endpoint
     NoReqBody
     jsonResponse
-    ( "ids" =: idsParam <> apiOpts token )
+    ( paramName =: idsParam <> apiOpts token )
 
-  let env = responseBody resp :: SubjectsEnvelope
-  pure (suData env)
+  pure (peData (responseBody resp))
 
 chunkN :: Int -> [a] -> [[a]]
 chunkN n0 = go

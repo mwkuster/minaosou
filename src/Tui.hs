@@ -24,17 +24,16 @@ import Data.Time (UTCTime)
 import Data.Time.LocalTime (TimeZone)
 
 runStudyTui
-  :: Int -> Maybe String -> Bool
+  :: StudyConfig
   -> Api.User -> Api.Summary -> UTCTime -> TimeZone
   -> M.Map Api.SubjectId Api.Subject
   -> M.Map Api.SubjectId Api.Assignment
   -> M.Map Api.SubjectId (Int, Int)
   -> [Api.Subject]
-  -> Bool
   -> IO (UTCTime, Api.Summary)
   -> ([Submission] -> IO SubmitResult)
   -> IO (Bool, [(Api.SubjectId, Int, Int)])
-runStudyTui rqAfter audioPlayer audioAutoplay user summary now tz allSubjects subjToAsg priorWrong subjects practiceOnly refreshFn submitFn = do
+runStudyTui cfg user summary now tz allSubjects subjToAsg priorWrong subjects refreshFn submitFn = do
   let queue0 = concatMap mkQuestions subjects
       prog0  = M.fromList [ (Api.subjId s, initProgress s) | s <- subjects ]
 
@@ -47,7 +46,7 @@ runStudyTui rqAfter audioPlayer audioAutoplay user summary now tz allSubjects su
         , stInput        = T.empty
         , stProgress     = prog0
         , stSubjToAsg    = subjToAsg
-        , stRequeueAfter = rqAfter
+        , stRequeueAfter = scRequeueAfter cfg
         , stCorrect      = 0
         , stWrong        = 0
         , stOverridden   = 0
@@ -56,7 +55,7 @@ runStudyTui rqAfter audioPlayer audioAutoplay user summary now tz allSubjects su
         , stError         = Nothing
         , stHasMore       = False
         , stWantsMore     = False
-        , stAudioPlayer   = audioPlayer
+        , stAudioPlayer   = scAudioPlayer cfg
         , stSubmitDetails = []
         , stOverlay       = NoOverlay
         , stAllSubjects   = allSubjects
@@ -67,9 +66,9 @@ runStudyTui rqAfter audioPlayer audioAutoplay user summary now tz allSubjects su
         , stSubmitChan    = chan
         , stLastCompleted = Nothing
         , stPriorWrong    = priorWrong
-        , stAudioAutoplay = audioAutoplay
+        , stAudioAutoplay = scAudioAutoplay cfg
         , stAutoplayed    = S.empty
-        , stPracticeOnly  = practiceOnly
+        , stPracticeOnly  = scPracticeOnly cfg
         }
 
   let buildVty = VCP.mkVty V.defaultConfig
