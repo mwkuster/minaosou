@@ -24,12 +24,14 @@ module Tui.State
   , requeueOnly
   , requeueAfterK
   , mkQueueWidget
+  , overlayViewport
 
     -- Progress / submissions
   , markOk
   , incWrong
   , mkSubmissions
   , sessionWrongCounts
+  , recordableWrongCounts
   , initProgress
 
     -- Setup
@@ -164,6 +166,11 @@ data AppState = AppState
   , stAudioAutoplay :: Bool                            -- auto-play reading audio on first appearance (config)
   , stAutoplayed    :: S.Set Api.SubjectId             -- subjects already auto-played this session
   , stPracticeOnly  :: Bool                            -- leech practice session: never submitted to WaniKani
+  , stSubmitAttempted :: Bool
+    -- ^ The user confirmed a submission and it ran to completion (whether
+    -- or not every individual review reached WaniKani -- failures are
+    -- persisted for retry). Gates 'recordableWrongCounts' so an abandoned
+    -- session doesn't write leech counts for reviews nobody recorded.
   }
 
 --------------------------------------------------------------------------------
@@ -264,6 +271,18 @@ mkQueueWidget :: [Q] -> L.List Name Q
 mkQueueWidget qs =
   L.list QueueList (Vec.fromList qs) 1
 
+-- | The scrollable viewport belonging to an overlay, if it has one.
+-- 'NoOverlay' has none -- expressed as 'Nothing' rather than as an
+-- unreachable 'error', so a future caller that forgets the guard scrolls
+-- nothing instead of taking down the whole TUI.
+overlayViewport :: Overlay -> Maybe Name
+overlayViewport o =
+  case o of
+    AllInfo        -> Just InfoViewport
+    UserInfo       -> Just UserViewport
+    ReviewSchedule -> Just ReviewViewport
+    NoOverlay      -> Nothing
+
 --------------------------------------------------------------------------------
 -- Progress / submissions
 --------------------------------------------------------------------------------
@@ -308,6 +327,19 @@ sessionWrongCounts st =
   | (sid, p) <- M.toList (stProgress st)
   , pMeaningWrong p > 0 || pReadingWrong p > 0
   ]
+
+-- | The wrong-answer counts that may be written to the cross-session leech
+-- history: this session's, but only if the user actually went through with
+-- submitting the batch.
+--
+-- Quitting mid-session leaves the reviews unrecorded on WaniKani, so the
+-- very same items come back in the next run. Persisting their misses anyway
+-- meant the same mistake was counted once per abandoned attempt, inflating
+-- a subject's leech weight without the user ever having missed it twice.
+recordableWrongCounts :: AppState -> [(Api.SubjectId, Int, Int)]
+recordableWrongCounts st
+  | stSubmitAttempted st = sessionWrongCounts st
+  | otherwise            = []
 
 --------------------------------------------------------------------------------
 -- Setup helpers

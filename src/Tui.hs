@@ -69,12 +69,13 @@ runStudyTui cfg user summary now tz allSubjects subjToAsg priorWrong subjects re
         , stAudioAutoplay = scAudioAutoplay cfg
         , stAutoplayed    = S.empty
         , stPracticeOnly  = scPracticeOnly cfg
+        , stSubmitAttempted = False
         }
 
   let buildVty = VCP.mkVty V.defaultConfig
   initialVty <- buildVty
   finalState <- customMain initialVty buildVty (Just chan) (app refreshFn submitFn) st0
-  pure (stWantsMore finalState, sessionWrongCounts finalState)
+  pure (stWantsMore finalState, recordableWrongCounts finalState)
 
 app :: IO (UTCTime, Api.Summary) -> ([Submission] -> IO SubmitResult) -> App AppState AppEvent Name
 app refreshFn submitFn = App

@@ -117,6 +117,7 @@ stateWith prog subjToAsg = Tui.AppState
   , Tui.stAudioAutoplay = False
   , Tui.stAutoplayed    = S.empty
   , Tui.stPracticeOnly  = False
+  , Tui.stSubmitAttempted = True
   }
 
 --------------------------------------------------------------------------------
@@ -163,6 +164,43 @@ spec = do
       Tui.normReading "gakkou" `shouldBe` "がっこう"
     it "romaji with apostrophe (n')" $
       Tui.normReading "n'a" `shouldBe` "んあ"
+
+  -- This used to be an 'error' in the NoOverlay branch, guarded only by the
+  -- caller. An exception here escapes customMain and skips the end-of-session
+  -- History.saveHistory, so it is now total.
+  describe "overlayViewport" $ do
+    it "maps the all-info overlay to its viewport" $
+      Tui.overlayViewport Tui.AllInfo `shouldBe` Just Tui.InfoViewport
+    it "maps the user overlay to its viewport" $
+      Tui.overlayViewport Tui.UserInfo `shouldBe` Just Tui.UserViewport
+    it "maps the review-schedule overlay to its viewport" $
+      Tui.overlayViewport Tui.ReviewSchedule `shouldBe` Just Tui.ReviewViewport
+    it "has no viewport when no overlay is open, rather than crashing" $
+      Tui.overlayViewport Tui.NoOverlay `shouldBe` Nothing
+
+  -- Quitting mid-session leaves the reviews unrecorded on WaniKani, so the
+  -- same items return next run. Persisting their misses anyway counted one
+  -- mistake once per abandoned attempt.
+  describe "recordableWrongCounts" $ do
+    let progWrong = M.fromList [ (sid 1, Tui.Progress True True False 2 1) ]
+        stAfter   = stateWith progWrong M.empty
+
+    it "records this session's misses once the batch was submitted" $
+      Tui.recordableWrongCounts stAfter { Tui.stSubmitAttempted = True }
+        `shouldBe` [(sid 1, 2, 1)]
+
+    it "records nothing when the session was abandoned before submitting" $
+      Tui.recordableWrongCounts stAfter { Tui.stSubmitAttempted = False }
+        `shouldBe` []
+
+    it "still reports the raw session counts regardless of submission" $
+      Tui.sessionWrongCounts stAfter { Tui.stSubmitAttempted = False }
+        `shouldBe` [(sid 1, 2, 1)]
+
+    it "records nothing when nothing was missed, even after submitting" $
+      Tui.recordableWrongCounts
+        (stateWith (M.fromList [ (sid 1, Tui.Progress True True True 0 0) ]) M.empty)
+          { Tui.stSubmitAttempted = True } `shouldBe` []
 
   describe "checkAnswer" $ do
 

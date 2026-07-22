@@ -33,11 +33,16 @@ handleEvent _ _ (AppEvent (SubmitDone result)) =
       , stError         = Nothing
       , stHasMore       = srHasMore r
       , stSubmitDetails = srDetails r
+      , stSubmitAttempted = True
       }
+    -- Even a wholesale failure counts as attempted: the answers are either
+    -- recorded or queued in pending_reviews.json for the next run, so their
+    -- misses belong in the leech history either way.
     Left e -> st
       { stMode  = Finished
       , stBanner = Nothing
       , stError = Just (T.pack ("submit failed: " <> shortErr e))
+      , stSubmitAttempted = True
       }
 handleEvent refreshFn submitFn (VtyEvent ev) = do
   st <- get
@@ -103,14 +108,15 @@ handleOverlay ev =
       case stOverlay st of
         AllInfo -> close
         _       -> pure ()
+    -- Total on purpose. This used to 'error' in the NoOverlay case, which
+    -- was unreachable only by the caller's guard -- and an exception thrown
+    -- here escapes 'customMain' entirely, skipping the end-of-session
+    -- 'History.saveHistory' with no trace of why.
     scroll n = do
       st <- get
-      let vp = case stOverlay st of
-                 AllInfo        -> viewportScroll InfoViewport
-                 UserInfo       -> viewportScroll UserViewport
-                 ReviewSchedule -> viewportScroll ReviewViewport
-                 NoOverlay      -> error "scroll called with NoOverlay"
-      vScrollBy vp n
+      case overlayViewport (stOverlay st) of
+        Nothing -> pure ()
+        Just vp -> vScrollBy (viewportScroll vp) n
 
 -- | Ctrl-key actions shared between the Normal and WrongAnswer input modes:
 -- override/requeue the current question, play audio, open an overlay or the

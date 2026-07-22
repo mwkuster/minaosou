@@ -16,6 +16,9 @@ module Api
   , nextReviewBucket
   , reviewsPerHourNext24
 
+  , requestBudgetPerMinute
+  , admitRequest
+
   , SrsStage(..)
   , srsStageLabel
   , Assignment(..)
@@ -43,15 +46,19 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
-import Data.Time (UTCTime(..), addUTCTime)
+import Data.Time
+  (NominalDiffTime, UTCTime(..), addUTCTime, diffUTCTime, getCurrentTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 
 import qualified Data.ByteString.Char8 as BS8
 import Network.HTTP.Req
 import qualified Network.HTTP.Client as HC
 import Network.HTTP.Types (status429, status500, status502, status503, status504)
+import Control.Concurrent (threadDelay)
+import Control.Concurrent.MVar (MVar, newMVar, modifyMVar)
 import Control.Exception (SomeException, fromException)
 import Control.Retry (RetryPolicyM, RetryStatus, capDelay, exponentialBackoff, limitRetries)
+import System.IO.Unsafe (unsafePerformIO)
 import Text.URI (mkURI)
 
 --------------------------------------------------------------------------------
@@ -119,6 +126,67 @@ retryingHttpConfig = defaultHttpConfig
   }
 
 --------------------------------------------------------------------------------
+-- Rate limiting
+--------------------------------------------------------------------------------
+
+-- | WaniKani allows 60 requests per rolling minute. Stay below that, since
+-- exceeding it earns a 429 -- and while 'apiRetryJudge' does retry those,
+-- the retry budget (4 attempts, ~15s of backoff) cannot outlast a 60-second
+-- rate-limit window, so a big enough burst fails outright. Capping
+-- concurrency alone does not help: 30 submissions fired 50-at-a-time is
+-- still 30 requests in one second.
+requestBudgetPerMinute :: Int
+requestBudgetPerMinute = 50
+
+-- | Decide whether a request may proceed, given the timestamps of the
+-- requests already made (newest first) and the current time.
+--
+-- @Right window@ admits the request and returns the new window (pruned of
+-- entries that have aged out, with @now@ recorded). @Left wait@ refuses it
+-- and says how long until the oldest in-window request ages out. Split out
+-- from the 'MVar' plumbing so the policy itself is directly testable.
+--
+-- This is a sliding window rather than a fixed rate, so a normal batch of
+-- 30 submissions still goes out at full speed; only sustained traffic
+-- beyond the budget is throttled.
+admitRequest :: Int -> UTCTime -> [UTCTime] -> Either NominalDiffTime [UTCTime]
+admitRequest budget now sent
+  | length inWindow < budget = Right (now : inWindow)
+  | otherwise                = Left (60 - diffUTCTime now oldest)
+  where
+    inWindow = takeWhile (\t -> diffUTCTime now t < 60) sent
+    oldest   = last inWindow
+
+-- | Timestamps of recent API requests, newest first. A process-wide global
+-- because the limit is per WaniKani account and kroki talks to exactly one,
+-- from any number of concurrent submission threads.
+{-# NOINLINE sentRequests #-}
+sentRequests :: MVar [UTCTime]
+sentRequests = unsafePerformIO (newMVar [])
+
+-- | Block until this request fits inside the budget.
+awaitRequestSlot :: IO ()
+awaitRequestSlot = do
+  decision <- modifyMVar sentRequests $ \sent -> do
+    now <- getCurrentTime
+    pure $ case admitRequest requestBudgetPerMinute now sent of
+      Right window -> (window, Nothing)
+      Left wait    -> (sent,   Just wait)
+  case decision of
+    Nothing   -> pure ()
+    Just wait -> do
+      -- Round up, and always sleep a little, so a near-zero wait can't spin.
+      threadDelay (max 10000 (ceiling (realToFrac wait * 1e6 :: Double)))
+      awaitRequestSlot
+
+-- | Every WaniKani call goes through here: rate limited first, then run
+-- with the retrying config.
+runApi :: Req a -> IO a
+runApi action = do
+  awaitRequestSlot
+  runReq retryingHttpConfig action
+
+--------------------------------------------------------------------------------
 -- User
 --------------------------------------------------------------------------------
 
@@ -139,7 +207,7 @@ instance FromJSON UserEnvelope where
     UserEnvelope <$> o .: "data"
 
 getUser :: String -> IO User
-getUser token = runReq retryingHttpConfig $ do
+getUser token = runApi $ do
   resp <- req
     GET
     (https "api.wanikani.com" /: "v2" /: "user")
@@ -178,7 +246,7 @@ instance FromJSON ReviewBucket where
     ReviewBucket at <$> o .: "subject_ids"
 
 getSummary :: String -> IO Summary
-getSummary token = runReq retryingHttpConfig $ do
+getSummary token = runApi $ do
   resp <- req
     GET
     (https "api.wanikani.com" /: "v2" /: "summary")
@@ -309,7 +377,7 @@ getAvailableAssignments :: String -> UTCTime -> Int -> IO [Assignment]
 getAvailableAssignments token now n = do
   let nowParam = T.pack (iso8601Show now)
 
-  firstPage <- runReq retryingHttpConfig $ do
+  firstPage <- runApi $ do
     resp <- req
       GET
       (https "api.wanikani.com" /: "v2" /: "assignments")
@@ -343,7 +411,7 @@ fetchPage :: FromJSON a => String -> Text -> IO (PagedEnvelope a)
 fetchPage token url = do
   uri <- mkURI url
   case useURI uri of
-    Just (Right (u, opts)) -> runReq retryingHttpConfig $ do
+    Just (Right (u, opts)) -> runApi $ do
       resp <- req GET u NoReqBody jsonResponse (opts <> apiOpts token)
       pure (responseBody resp)
     _ -> fail ("kroki: unexpected next_url, not an https URL: " <> T.unpack url)
@@ -367,7 +435,7 @@ getStillAvailableAssignmentIds :: String -> UTCTime -> [AssignmentId] -> IO (Set
 getStillAvailableAssignmentIds _ _ [] = pure Set.empty
 getStillAvailableAssignmentIds token now ids = do
   let nowParam = T.pack (iso8601Show now)
-      fetchAssignmentIdsChunk idsChunk = runReq retryingHttpConfig $ do
+      fetchAssignmentIdsChunk idsChunk = runApi $ do
         let idsParam = T.intercalate "," (map (T.pack . show . unAssignmentId) idsChunk)
         resp <- req
           GET
@@ -542,7 +610,7 @@ instance FromJSON StudyMaterial where
 -- ever annotated) but is paginated like every other WaniKani collection.
 getMeaningSynonyms :: String -> IO (M.Map SubjectId [Text])
 getMeaningSynonyms token = do
-  firstPage <- runReq retryingHttpConfig $ do
+  firstPage <- runApi $ do
     resp <- req
       GET
       (https "api.wanikani.com" /: "v2" /: "study_materials")
@@ -568,7 +636,7 @@ fetchBySubjectIdsChunked token endpoint paramName ids =
   fmap concat $ mapM (fetchChunk token endpoint paramName) (chunkN 100 ids)
 
 fetchChunk :: FromJSON a => String -> Url 'Https -> Text -> [SubjectId] -> IO [a]
-fetchChunk token endpoint paramName idsChunk = runReq retryingHttpConfig $ do
+fetchChunk token endpoint paramName idsChunk = runApi $ do
   let idsParam = T.intercalate "," (map (T.pack . show . unSubjectId) idsChunk)
 
   resp <- req
@@ -606,7 +674,7 @@ instance FromJSON ReviewEnvelope where
 
 createReview :: String -> AssignmentId -> Int -> Int -> UTCTime -> IO ReviewResult
 createReview token assignmentId wrongMeaning wrongReading createdAt =
-  runReq retryingHttpConfig $ do
+  runApi $ do
     let body =
           object
             [ "review" .= object

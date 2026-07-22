@@ -11,7 +11,7 @@ import qualified Data.ByteString as BS
 import Data.ByteString.Lazy (ByteString)
 import Data.Char (isDigit)
 import qualified Data.Map.Strict as M
-import Data.Time (UTCTime(..), fromGregorian, getCurrentTime, secondsToDiffTime)
+import Data.Time (UTCTime(..), addUTCTime, fromGregorian, getCurrentTime, secondsToDiffTime)
 import qualified Network.HTTP.Client as HC
 import qualified Network.HTTP.Client.Internal as HCI
 import qualified Network.HTTP.Req as Req
@@ -261,6 +261,43 @@ apiSpec = describe "Api JSON parsing" $ do
     it "defaults to Nothing when the pages key itself is absent" $
       fmap Api.peNextUrl (decode noPagesKey :: Maybe (Api.PagedEnvelope Int))
         `shouldBe` Just Nothing
+
+  describe "admitRequest (rate limiting)" $ do
+    let t0 = UTCTime (fromGregorian 2026 7 22) (secondsToDiffTime 0)
+        at secs = addUTCTime (fromIntegral (secs :: Int)) t0
+
+    it "admits a request when the window is empty" $
+      Api.admitRequest 3 t0 [] `shouldBe` Right [t0]
+
+    it "records the new request at the front of the window" $
+      Api.admitRequest 3 (at 1) [t0] `shouldBe` Right [at 1, t0]
+
+    it "admits right up to the budget" $
+      Api.admitRequest 3 (at 2) [at 1, t0] `shouldBe` Right [at 2, at 1, t0]
+
+    -- A burst up to the budget must not be throttled: a normal batch of 30
+    -- submissions should still go out at full speed.
+    it "refuses once the budget is used up inside the window" $
+      Api.admitRequest 3 (at 2) [at 1, at 1, t0]
+        `shouldBe` Left 58   -- wait until the oldest (t0) ages out at t0+60
+
+    -- At t0+60 the two t0+1 entries are still inside the window (59s old)
+    -- but t0 itself is exactly 60s old and has aged out, freeing one slot.
+    it "admits again once an old request has aged out of the window" $
+      Api.admitRequest 3 (at 60) [at 1, at 1, t0]
+        `shouldBe` Right [at 60, at 1, at 1]
+
+    it "treats an exactly-60s-old request as outside the window" $
+      Api.admitRequest 1 (at 60) [t0] `shouldBe` Right [at 60]
+
+    it "still counts a 59s-old request as inside the window" $
+      Api.admitRequest 1 (at 59) [t0] `shouldBe` Left 1
+
+    it "drops aged-out entries rather than letting the window grow" $
+      Api.admitRequest 3 (at 120) [at 59, t0] `shouldBe` Right [at 120]
+
+    it "keeps a real budget's worth of headroom under WaniKani's 60/min" $
+      Api.requestBudgetPerMinute `shouldSatisfy` (< 60)
 
   describe "Subject auxiliary_meanings" $ do
     let auxJson :: ByteString
