@@ -262,6 +262,58 @@ apiSpec = describe "Api JSON parsing" $ do
       fmap Api.peNextUrl (decode noPagesKey :: Maybe (Api.PagedEnvelope Int))
         `shouldBe` Just Nothing
 
+  describe "Subject auxiliary_meanings" $ do
+    let auxJson :: ByteString
+        auxJson = "{\"id\":440,\"object\":\"kanji\",\"data\":{\"level\":1,\"characters\":\"\\u907F\",\
+                  \\"meanings\":[{\"meaning\":\"Dodge\",\"accepted_answer\":true},\
+                  \{\"meaning\":\"Avoid\",\"accepted_answer\":true}],\
+                  \\"auxiliary_meanings\":[{\"meaning\":\"Evade\",\"type\":\"whitelist\"},\
+                  \{\"meaning\":\"Escape\",\"type\":\"blacklist\"}],\
+                  \\"readings\":[{\"reading\":\"\\u3072\",\"accepted_answer\":true}]}}"
+        noAuxJson :: ByteString
+        noAuxJson = "{\"id\":1,\"object\":\"kanji\",\"data\":{\"level\":1,\"characters\":\"\\u4E00\",\
+                    \\"meanings\":[{\"meaning\":\"One\",\"accepted_answer\":true}],\
+                    \\"readings\":[{\"reading\":\"\\u3044\\u3061\",\"accepted_answer\":true}]}}"
+
+    it "parses whitelisted auxiliary meanings" $
+      fmap Api.subjAuxWhitelist (decode auxJson :: Maybe Api.Subject)
+        `shouldBe` Just ["Evade"]
+
+    it "parses blacklisted auxiliary meanings separately" $
+      fmap Api.subjAuxBlacklist (decode auxJson :: Maybe Api.Subject)
+        `shouldBe` Just ["Escape"]
+
+    it "leaves the primary meanings untouched" $
+      fmap Api.subjMeanings (decode auxJson :: Maybe Api.Subject)
+        `shouldBe` Just ["Dodge", "Avoid"]
+
+    it "defaults to empty when the key is absent" $
+      fmap Api.subjAuxWhitelist (decode noAuxJson :: Maybe Api.Subject)
+        `shouldBe` Just []
+
+    it "starts with no user synonyms (filled in from study_materials)" $
+      fmap Api.subjUserSynonyms (decode auxJson :: Maybe Api.Subject)
+        `shouldBe` Just []
+
+  describe "StudyMaterial" $ do
+    let smJson :: ByteString
+        smJson = "{\"id\":65231,\"object\":\"study_material\",\
+                 \\"data\":{\"subject_id\":8693,\"meaning_synonyms\":[\"both directions\"]}}"
+        smNoSyn :: ByteString
+        smNoSyn = "{\"id\":1,\"object\":\"study_material\",\"data\":{\"subject_id\":42}}"
+
+    it "parses the subject id" $
+      fmap Api.smSubjectId (decode smJson :: Maybe Api.StudyMaterial)
+        `shouldBe` Just (Api.SubjectId 8693)
+
+    it "parses meaning synonyms" $
+      fmap Api.smMeaningSynonyms (decode smJson :: Maybe Api.StudyMaterial)
+        `shouldBe` Just ["both directions"]
+
+    it "defaults to no synonyms when the key is absent" $
+      fmap Api.smMeaningSynonyms (decode smNoSyn :: Maybe Api.StudyMaterial)
+        `shouldBe` Just []
+
   describe "Subject (kanji)" $ do
     -- WaniKani omits absent optional fields rather than sending null;
     -- aeson's .:? only yields Nothing for absent keys, not for null values

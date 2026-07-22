@@ -39,6 +39,7 @@ module Tui.State
 
     -- Answer checking / display
   , checkAnswer
+  , acceptedMeanings
   , normMeaning
   , normReading
   , britishToAmerican
@@ -352,12 +353,34 @@ acceptedReadings s =
 -- Answer checking / display
 --------------------------------------------------------------------------------
 
+-- | Every answer that counts as a correct meaning, matching what WaniKani
+-- itself accepts in a review: its primary meanings, its whitelisted
+-- auxiliary meanings, and the user's own synonyms -- minus anything
+-- WaniKani explicitly blacklists.
+--
+-- Checking against 'Api.subjMeanings' alone (as this used to) makes kroki
+-- stricter than WaniKani: roughly a third of subjects carry a whitelisted
+-- alternative, so a legitimate answer was marked wrong, requeued, recorded
+-- as a leech, /and/ submitted back to WaniKani as incorrect -- actively
+-- lowering the SRS stage for an answer WaniKani would have accepted.
+acceptedMeanings :: Api.Subject -> [Text]
+acceptedMeanings subj =
+  [ m
+  | m <- Api.subjMeanings subj
+      ++ Api.subjAuxWhitelist subj
+      ++ Api.subjUserSynonyms subj
+  , normMeaning m `notElem` blacklisted
+  ]
+  where blacklisted = map normMeaning (Api.subjAuxBlacklist subj)
+
 checkAnswer :: Q -> Text -> (Bool, [String])
 checkAnswer (Q subj kind) ans =
   case kind of
     QMeaning ->
-      let acceptedNorm = map normMeaning (Api.subjMeanings subj)
+      let acceptedNorm = map normMeaning (acceptedMeanings subj)
       in ( normMeaning ans `elem` acceptedNorm
+         -- Show only the canonical meanings: the alternatives are accepted
+         -- silently, but WaniKani teaches these.
          , map T.unpack (Api.subjMeanings subj)
          )
     QReading ->

@@ -38,6 +38,9 @@ kanjiSubj = Api.Subject
   , Api.subjComponentIds    = []
   , Api.subjAmalgamationIds = []
   , Api.subjVisuallySimilarIds = []
+  , Api.subjAuxWhitelist = []
+  , Api.subjAuxBlacklist = []
+  , Api.subjUserSynonyms = []
   }
 
 -- Radical (no reading question)
@@ -55,6 +58,9 @@ radicalSubj = Api.Subject
   , Api.subjComponentIds    = []
   , Api.subjAmalgamationIds = []
   , Api.subjVisuallySimilarIds = []
+  , Api.subjAuxWhitelist = []
+  , Api.subjAuxBlacklist = []
+  , Api.subjUserSynonyms = []
   }
 
 -- Vocab subject
@@ -72,6 +78,9 @@ vocabSubj = Api.Subject
   , Api.subjComponentIds    = []
   , Api.subjAmalgamationIds = []
   , Api.subjVisuallySimilarIds = []
+  , Api.subjAuxWhitelist = []
+  , Api.subjAuxBlacklist = []
+  , Api.subjUserSynonyms = []
   }
 
 mkQ :: Api.Subject -> Tui.QKind -> Tui.Q
@@ -168,6 +177,44 @@ spec = do
         fst (Tui.checkAnswer (mkQ kanjiSubj Tui.QMeaning) "Moon") `shouldBe` False
       it "returns accepted meanings on failure" $
         snd (Tui.checkAnswer (mkQ kanjiSubj Tui.QMeaning) "Moon") `shouldBe` ["Sun", "Day"]
+
+    -- kroki must accept exactly what WaniKani accepts. Checking only the
+    -- primary meanings marked a legitimate answer wrong, requeued it,
+    -- recorded it as a leech, and submitted it to WaniKani as incorrect --
+    -- lowering the SRS stage for an answer WaniKani would have taken.
+    describe "meanings WaniKani accepts beyond the primary ones" $ do
+      let auxSubj = kanjiSubj
+            { Api.subjAuxWhitelist = ["Evade"]
+            , Api.subjAuxBlacklist = ["Escape"]
+            }
+          synSubj = kanjiSubj { Api.subjUserSynonyms = ["daylight"] }
+
+      it "accepts a whitelisted auxiliary meaning" $
+        fst (Tui.checkAnswer (mkQ auxSubj Tui.QMeaning) "Evade") `shouldBe` True
+      it "accepts a whitelisted auxiliary meaning case-insensitively" $
+        fst (Tui.checkAnswer (mkQ auxSubj Tui.QMeaning) "evade") `shouldBe` True
+      it "accepts one of the user's own synonyms" $
+        fst (Tui.checkAnswer (mkQ synSubj Tui.QMeaning) "Daylight") `shouldBe` True
+      it "still rejects a genuinely wrong answer" $
+        fst (Tui.checkAnswer (mkQ auxSubj Tui.QMeaning) "Moon") `shouldBe` False
+      it "rejects a blacklisted meaning" $
+        fst (Tui.checkAnswer (mkQ auxSubj Tui.QMeaning) "Escape") `shouldBe` False
+      it "keeps displaying only the canonical meanings" $
+        snd (Tui.checkAnswer (mkQ auxSubj Tui.QMeaning) "Moon") `shouldBe` ["Sun", "Day"]
+
+      describe "acceptedMeanings" $ do
+        it "unions primary, whitelist and user synonyms" $
+          Tui.acceptedMeanings kanjiSubj
+            { Api.subjAuxWhitelist = ["Evade"]
+            , Api.subjUserSynonyms = ["daylight"]
+            } `shouldBe` ["Sun", "Day", "Evade", "daylight"]
+        it "excludes blacklisted meanings even if otherwise present" $
+          Tui.acceptedMeanings kanjiSubj
+            { Api.subjAuxWhitelist = ["Evade", "Escape"]
+            , Api.subjAuxBlacklist = ["Escape"]
+            } `shouldBe` ["Sun", "Day", "Evade"]
+        it "is just the primary meanings when nothing extra is set" $
+          Tui.acceptedMeanings kanjiSubj `shouldBe` ["Sun", "Day"]
 
     describe "reading questions" $ do
       it "accepts hiragana directly" $

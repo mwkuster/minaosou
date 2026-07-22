@@ -27,14 +27,17 @@ module Api
   , SubjectType(..)
   , Subject(..)
   , getSubjectsByIds
+  , StudyMaterial(..)
+  , getMeaningSynonyms
   , ReviewResult(..)
   , createReview
   ) where
 
-import Data.Aeson (FromJSON(..), ToJSON(..), Object, object, withObject, (.:), (.:?), (.=))
+import Data.Aeson (FromJSON(..), ToJSON(..), Object, object, withObject, (.:), (.:?), (.!=), (.=))
 import Data.Aeson.Types (Parser)
 import qualified Data.Aeson.Key as Key
 import Data.List (sortOn)
+import qualified Data.Map.Strict as M
 import Data.Maybe (catMaybes, fromMaybe)
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -392,7 +395,21 @@ data Subject = Subject
   , subjType             :: SubjectType
   , subjLevel            :: Int
   , subjChars            :: Maybe Text
-  , subjMeanings         :: [Text]       -- accepted meanings
+  , subjMeanings         :: [Text]       -- primary accepted meanings (what we display)
+  , subjAuxWhitelist     :: [Text]
+    -- ^ Extra meanings WaniKani accepts in its own reviews
+    -- (@auxiliary_meanings@ of type @whitelist@) but does not display as the
+    -- canonical answer, e.g. "Evade" for 避 (Dodge/Avoid) or "6" for 六.
+    -- Without these, kroki rejects answers WaniKani would have accepted and
+    -- then reports them back as incorrect, lowering the SRS stage.
+  , subjAuxBlacklist     :: [Text]
+    -- ^ Meanings WaniKani explicitly refuses (@auxiliary_meanings@ of type
+    -- @blacklist@), even when they would otherwise look acceptable.
+  , subjUserSynonyms     :: [Text]
+    -- ^ The user's own meaning synonyms for this subject. Not part of the
+    -- subject endpoint's payload -- filled in from @study_materials@ (see
+    -- 'getMeaningSynonyms') after the subject is fetched, and empty until
+    -- then.
   , subjReadings         :: [Text]       -- accepted readings (kana/romaji depending on type)
   , subjAudioUrls        :: [Text]       -- pronunciation audio URLs (vocab only)
   , subjMeaningMnemonic  :: Maybe Text
@@ -407,6 +424,17 @@ newtype PronAudio = PronAudio { paUrl :: Text }
 instance FromJSON PronAudio where
   parseJSON = withObject "PronAudio" $ \o -> PronAudio <$> o .: "url"
 
+-- | One entry of a subject's @auxiliary_meanings@: a meaning plus whether
+-- WaniKani accepts it (@whitelist@) or refuses it (@blacklist@).
+data AuxMeaning = AuxMeaning
+  { amMeaning :: Text
+  , amType    :: Text
+  } deriving (Show, Eq)
+
+instance FromJSON AuxMeaning where
+  parseJSON = withObject "AuxMeaning" $ \o ->
+    AuxMeaning <$> o .: "meaning" <*> o .: "type"
+
 instance FromJSON Subject where
   parseJSON = withObject "Subject" $ \o -> do
     sid <- o .: "id"
@@ -418,6 +446,8 @@ instance FromJSON Subject where
     chars <- d .:? "characters"
 
     meanings <- d .: "meanings" >>= parseAccepted "meaning"
+    aux      <- d .:? "auxiliary_meanings" .!= []
+    let auxOfType ty = [ amMeaning a | a <- aux, amType a == ty ]
     readings <- case st of
       Radical -> pure []
       _       -> d .:? "readings" >>= maybe (pure []) (parseAccepted "reading")
@@ -446,6 +476,9 @@ instance FromJSON Subject where
       , subjLevel           = lvl
       , subjChars           = chars
       , subjMeanings        = meanings
+      , subjAuxWhitelist    = auxOfType "whitelist"
+      , subjAuxBlacklist    = auxOfType "blacklist"
+      , subjUserSynonyms    = []
       , subjReadings        = readings
       , subjAudioUrls       = audioUrls
       , subjMeaningMnemonic = mmnem
@@ -483,6 +516,46 @@ acceptedFrom field o = do
 -- Fetch subjects by IDs; chunk to avoid huge URLs.
 getSubjectsByIds :: String -> [SubjectId] -> IO [Subject]
 getSubjectsByIds token = fetchBySubjectIdsChunked token (https "api.wanikani.com" /: "v2" /: "subjects") "ids"
+
+--------------------------------------------------------------------------------
+-- Study materials (the user's own meaning synonyms)
+--------------------------------------------------------------------------------
+
+-- | A @study_materials@ record: the user's personal notes and synonyms for
+-- one subject. Only the meaning synonyms are of interest here -- they are
+-- answers the user deliberately told WaniKani to accept, so kroki must
+-- accept them too.
+data StudyMaterial = StudyMaterial
+  { smSubjectId       :: SubjectId
+  , smMeaningSynonyms :: [Text]
+  } deriving (Show, Eq)
+
+instance FromJSON StudyMaterial where
+  parseJSON = withObject "StudyMaterial" $ \o -> do
+    d <- o .: "data"
+    StudyMaterial
+      <$> d .:  "subject_id"
+      <*> d .:? "meaning_synonyms" .!= []
+
+-- | Every subject the user has defined meaning synonyms for. One call per
+-- session; the collection is small (one record per subject the user has
+-- ever annotated) but is paginated like every other WaniKani collection.
+getMeaningSynonyms :: String -> IO (M.Map SubjectId [Text])
+getMeaningSynonyms token = do
+  firstPage <- runReq retryingHttpConfig $ do
+    resp <- req
+      GET
+      (https "api.wanikani.com" /: "v2" /: "study_materials")
+      NoReqBody
+      jsonResponse
+      (apiOpts token)
+    pure (responseBody resp :: PagedEnvelope StudyMaterial)
+  materials <- collectPages token maxBound firstPage
+  pure $ M.fromListWith (<>)
+    [ (smSubjectId sm, smMeaningSynonyms sm)
+    | sm <- materials
+    , not (null (smMeaningSynonyms sm))
+    ]
 
 -- | Fetch a resource keyed by subject id, chunked into groups of 100 to
 -- avoid overlong URLs. Shared by 'getSubjectsByIds' and

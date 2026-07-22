@@ -75,6 +75,14 @@ executable kroki
       , vty-crossplatform
       , process
 
+    -- Needed to give the config file (which holds an API token) an
+    -- owner-only mode. System.Directory.setPermissions only modifies the
+    -- owner bits and leaves group/other as the umask left them, so it
+    -- cannot actually take away world-readability.
+    if !os(windows)
+      build-depends: unix
+      cpp-options:   -DHAS_POSIX
+
 test-suite kroki-test
     type:             exitcode-stdio-1.0
     main-is:          Spec.hs
@@ -102,3 +110,7 @@ test-suite kroki-test
       , vty-crossplatform
       , vector
       , process
+
+    if !os(windows)
+      build-depends: unix
+      cpp-options:   -DHAS_POSIX

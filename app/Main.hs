@@ -67,6 +67,7 @@ main = do
       runLeechStudy t initialHistory = do
         user <- Api.getUser t
         summary0 <- Api.getSummary t
+        userSynonyms <- Api.getMeaningSynonyms t
         let batchSize =
               Config.cfgBatchSize cfg <|> Just Config.defaultBatchSize
             rqAfter =
@@ -86,8 +87,9 @@ main = do
                   now <- getCurrentTime
                   tz  <- getCurrentTimeZone
 
-                  leechSubjects <- Api.getSubjectsByIds t batchIds
-                  allSubjMap <- fetchSubjectContext t leechSubjects
+                  leechSubjects <- applyUserSynonyms userSynonyms
+                                     <$> Api.getSubjectsByIds t batchIds
+                  allSubjMap <- fetchSubjectContext t userSynonyms leechSubjects
                   asgs <- Api.getAssignmentsBySubjectIds t batchIds
                   let subjToAsg = M.fromList [ (Api.asSubjectId a, a) | a <- asgs ]
                       asgToInfo = M.fromList
@@ -142,6 +144,7 @@ main = do
         tz   <- getCurrentTimeZone
         user <- Api.getUser t
         summary <- Api.getSummary t
+        userSynonyms <- Api.getMeaningSynonyms t
 
         -- A create-review POST can throw on the client side (timeout,
         -- connection closed) even though WaniKani already processed it --
@@ -217,8 +220,9 @@ main = do
                 else do
                   let subjectIds = map Api.asSubjectId as
                       subjToAsg  = M.fromList [ (Api.asSubjectId a, a) | a <- as ]
-                  subjects <- Api.getSubjectsByIds t subjectIds
-                  allSubjMap <- fetchSubjectContext t subjects
+                  subjects <- applyUserSynonyms userSynonyms
+                                <$> Api.getSubjectsByIds t subjectIds
+                  allSubjMap <- fetchSubjectContext t userSynonyms subjects
                   let asgToInfo  = M.fromList
                         [ (Api.asId asg, (subj, asg))
                         | subj <- subjects
@@ -390,30 +394,37 @@ main = do
 
     Cli.Study studyOpts -> runStudy studyOpts
 
+-- | Attach the user's own WaniKani meaning synonyms to each subject, so
+-- 'Tui.acceptedMeanings' treats them as correct answers -- the user added
+-- them precisely so WaniKani would accept them.
+applyUserSynonyms :: M.Map Api.SubjectId [T.Text] -> [Api.Subject] -> [Api.Subject]
+applyUserSynonyms syns =
+  map (\s -> s { Api.subjUserSynonyms = M.findWithDefault [] (Api.subjId s) syns })
+
 -- | Fetch the extra subjects referenced by a batch of subjects being
 -- studied -- component kanji/radicals, vocabulary that uses a kanji, and
 -- visually-similar kanji -- and build a lookup map covering both the batch
 -- itself and everything referenced from it. Used to render the Ctrl-a
 -- overlay and wrong-answer hints; shared by a normal study batch and a
 -- leech practice round, which need identical reference data.
-fetchSubjectContext :: String -> [Api.Subject] -> IO (M.Map Api.SubjectId Api.Subject)
-fetchSubjectContext t subjects = do
+fetchSubjectContext :: String -> M.Map Api.SubjectId [T.Text] -> [Api.Subject] -> IO (M.Map Api.SubjectId Api.Subject)
+fetchSubjectContext t syns subjects = do
   let compIds = nub [ cid | s <- subjects, cid <- Api.subjComponentIds s ]
-  compSubjects <- Api.getSubjectsByIds t compIds
+  compSubjects <- applyUserSynonyms syns <$> Api.getSubjectsByIds t compIds
   let amalgIds = nub
         [ aid
         | s <- subjects
         , Api.subjType s == Api.Kanji
         , aid <- Api.subjAmalgamationIds s
         ]
-  amalgSubjects <- Api.getSubjectsByIds t amalgIds
+  amalgSubjects <- applyUserSynonyms syns <$> Api.getSubjectsByIds t amalgIds
   let simIds = nub
         [ vid
         | s <- subjects
         , Api.subjType s == Api.Kanji
         , vid <- Api.subjVisuallySimilarIds s
         ]
-  simSubjects <- Api.getSubjectsByIds t simIds
+  simSubjects <- applyUserSynonyms syns <$> Api.getSubjectsByIds t simIds
   pure $ M.fromList
     [ (Api.subjId s, s)
     | s <- subjects ++ compSubjects ++ amalgSubjects ++ simSubjects

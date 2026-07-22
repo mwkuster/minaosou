@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Config
@@ -11,9 +12,22 @@ module Config
 
 import Control.Exception (IOException, catch)
 import Data.Char (isSpace, toLower)
-import System.Directory (getXdgDirectory, XdgDirectory(XdgConfig), createDirectoryIfMissing, doesFileExist)
+import System.Directory
+  ( XdgDirectory(XdgConfig)
+  , createDirectoryIfMissing
+  , doesFileExist
+  , getXdgDirectory
+  , renameFile
+  )
 import System.FilePath ((</>))
-import System.IO (hFlush, stdout)
+import System.IO (hFlush, readFile', stdout)
+#ifdef HAS_POSIX
+import Data.Bits ((.|.))
+import System.Posix.Files (ownerReadMode, ownerWriteMode, setFileMode)
+#else
+import System.Directory
+  ( Permissions(readable, writable), emptyPermissions, setPermissions )
+#endif
 
 -- | Shared default values, used both in Main and in the init wizard.
 defaultBatchSize :: Int
@@ -31,11 +45,19 @@ data KrokiConfig = KrokiConfig
   } deriving (Show, Eq)
 
 -- Loads ~/.config/kroki/config (via XDG)
+--
+-- The read is strict ('readFile''). With lazy 'readFile' the handle stays
+-- open until the parsed values are forced, and 'lookupKey' stops at the
+-- first match rather than consuming to EOF -- so the handle was still open
+-- (and the file still locked) when 'writeConfigInteractive' tried to write
+-- the same path, making @kroki init@ fail outright with
+-- @withFile: resource busy (file is locked)@ whenever a config already
+-- existed.
 loadConfig :: IO KrokiConfig
 loadConfig = do
   base <- getXdgDirectory XdgConfig "kroki"
   let path = base </> "config"
-  content <- readFile path `catch` \(_ :: IOException) -> pure ""
+  content <- readFile' path `catch` \(_ :: IOException) -> pure ""
   pure $ parseConfig content
 
 parseConfig :: String -> KrokiConfig
@@ -109,8 +131,34 @@ writeConfigInteractive dir path existing = do
         ]
 
   createDirectoryIfMissing True dir
-  writeFile path content
+  writeConfigFile path content
   putStrLn ("Config written to: " <> path)
+
+-- | Write the config with owner-only permissions. It holds a live API
+-- token, so it must not be world-readable -- and the restricted mode is set
+-- on a temp file that is then renamed into place, so the real config never
+-- exists on disk in a readable-by-everyone state, not even briefly.
+writeConfigFile :: FilePath -> String -> IO ()
+writeConfigFile path content = do
+  let tmp = path <> ".tmp"
+  writeFile tmp content
+  restrictToOwner tmp
+  renameFile tmp path
+
+-- | Make a file readable and writable by its owner only.
+--
+-- 'setPermissions' is not enough on POSIX: it only modifies the /owner/
+-- mode bits and leaves group and other exactly as the umask left them, so
+-- it cannot take away the world-readability a default 022 umask gives a
+-- freshly written file. It is still the best available fallback where
+-- 'setFileMode' does not exist.
+restrictToOwner :: FilePath -> IO ()
+#ifdef HAS_POSIX
+restrictToOwner path = setFileMode path (ownerReadMode .|. ownerWriteMode)
+#else
+restrictToOwner path =
+  setPermissions path (emptyPermissions { readable = True, writable = True })
+#endif
 
 -- | Prompt for the API token. Unlike other fields, an existing token is
 -- never echoed back (a secret shouldn't be shown on screen unnecessarily) --
