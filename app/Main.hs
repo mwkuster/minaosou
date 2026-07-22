@@ -6,12 +6,12 @@ import qualified Config
 import qualified History
 import qualified PendingReviews
 import qualified Tui
-import Util (strPadLeft, strPadRight)
+import Util (shortErr, strPadLeft, strPadRight, trySync)
 
 import Control.Applicative ((<|>))
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Concurrent.QSem (newQSem, signalQSem, waitQSem)
-import Control.Exception (SomeException, bracket_, displayException, try)
+import Control.Exception (SomeException, bracket_, try)
 import System.Environment (lookupEnv)
 import System.Exit (die)
 
@@ -425,7 +425,7 @@ fetchSubjectContext t subjects = do
 -- come from ('Tui.Submission' vs. 'PendingReviews.PendingReview').
 tryCreateReview :: String -> Api.AssignmentId -> Int -> Int -> UTCTime -> IO (Either SomeException Api.ReviewResult)
 tryCreateReview t assignmentId wrongMeaning wrongReading createdAt =
-  try (Api.createReview t assignmentId wrongMeaning wrongReading createdAt)
+  trySync (Api.createReview t assignmentId wrongMeaning wrongReading createdAt)
 
 -- | "name  status" for a submission, e.g. "字 (word)  incorrect (m:1 r:0)".
 -- Shared base for 'fmtSub' (appends the resulting WaniKani SRS stage) and
@@ -463,12 +463,6 @@ fmtLeechPractice
   -> Tui.Submission
   -> String
 fmtLeechPractice = fmtSubBase
-
-shortErr :: SomeException -> String
-shortErr e =
-  let msg     = displayException e
-      oneLine = takeWhile (/= '\n') msg
-  in if length oneLine > 120 then take 117 oneLine <> "..." else oneLine
 
 leechTotal :: History.LeechEntry -> Int
 leechTotal = History.leechWeight

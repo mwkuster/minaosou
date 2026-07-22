@@ -3,14 +3,29 @@
 module Main (main) where
 
 import Test.Hspec
+import Control.Exception
+  ( ErrorCall(..), SomeException, AsyncException(ThreadKilled)
+  , bracket, throwIO, toException, try )
 import Data.Aeson (decode, encode)
+import qualified Data.ByteString as BS
 import Data.ByteString.Lazy (ByteString)
+import Data.Char (isDigit)
 import qualified Data.Map.Strict as M
-import Data.Time (UTCTime(..), fromGregorian, secondsToDiffTime)
+import Data.Time (UTCTime(..), fromGregorian, getCurrentTime, secondsToDiffTime)
+import qualified Network.HTTP.Client as HC
+import qualified Network.HTTP.Client.Internal as HCI
+import qualified Network.HTTP.Req as Req
+import Network.HTTP.Types (Status(..), http11)
+import System.Directory
+  ( createDirectoryIfMissing, doesFileExist, getTemporaryDirectory
+  , removeDirectoryRecursive )
+import System.FilePath ((</>))
 import qualified Romaji
 import qualified TuiSpec
 import qualified Config
 import qualified History
+import qualified JsonStore
+import qualified Util
 import qualified Api
 
 main :: IO ()
@@ -19,6 +34,8 @@ main = hspec $ do
   configSpec
   apiSpec
   historySpec
+  utilSpec
+  jsonStoreSpec
 
   describe "romajiToHiragana" $ do
 
@@ -410,3 +427,153 @@ historySpec = describe "History" $ do
         [ (Api.SubjectId 1, (1, 0)), (Api.SubjectId 2, (3, 0)) ]
       History.historyCounts (History.activeLeeches after) `shouldBe`
         M.singleton (Api.SubjectId 2) (3, 0)
+
+--------------------------------------------------------------------------------
+-- Util
+--------------------------------------------------------------------------------
+
+-- | A 'HC.StatusCodeException' carrying the given status and body.
+statusCodeException :: Int -> BS.ByteString -> BS.ByteString -> HC.HttpExceptionContent
+statusCodeException code msg body =
+  HC.StatusCodeException
+    (HCI.Response
+       (Status code msg) http11 [] ()
+       (HC.createCookieJar []) (HCI.ResponseClose (pure ()))
+       HC.defaultRequest [])
+    body
+
+utilSpec :: Spec
+utilSpec = describe "Util" $ do
+
+  describe "shortErr" $ do
+    -- Regression: HttpException's Show instance dumps the whole multi-line
+    -- Request record *before* the content saying what actually went wrong,
+    -- so summarising by first line rendered every network failure alike as
+    -- the constant string "VanillaHttpException (HttpExceptionRequest
+    -- Request {" -- making a rate limit indistinguishable from a dropped
+    -- connection in both the Done screen and the logs.
+    it "reports the failure content, not the request dump" $
+      Util.shortErr
+        (toException (HC.HttpExceptionRequest HC.defaultRequest HC.ConnectionTimeout))
+        `shouldBe` "ConnectionTimeout"
+
+    it "unwraps req's VanillaHttpException wrapper" $
+      Util.shortErr
+        (toException (Req.VanillaHttpException
+          (HC.HttpExceptionRequest HC.defaultRequest HC.ResponseTimeout)))
+        `shouldBe` "ResponseTimeout"
+
+    it "surfaces the status code of a rate-limited response" $
+      Util.shortErr
+        (toException (HC.HttpExceptionRequest HC.defaultRequest
+          (statusCodeException 429 "Too Many Requests" "slow down")))
+        `shouldBe` "HTTP 429 Too Many Requests: slow down"
+
+    it "distinguishes a 422 rejection from a 429 rate limit" $
+      Util.shortErr
+        (toException (HC.HttpExceptionRequest HC.defaultRequest
+          (statusCodeException 422 "Unprocessable Entity" "")))
+        `shouldBe` "HTTP 422 Unprocessable Entity"
+
+    it "describes an invalid URL" $
+      Util.shortErr (toException (HC.InvalidUrlException "htp://x" "unknown scheme"))
+        `shouldBe` "invalid URL htp://x: unknown scheme"
+
+    it "describes a malformed JSON response" $
+      Util.shortErr (toException (Req.JsonHttpException "expected Object"))
+        `shouldBe` "malformed JSON in response: expected Object"
+
+    it "falls back to displayException for non-HTTP exceptions" $
+      Util.shortErr (toException (ErrorCall "boom")) `shouldBe` "boom"
+
+    it "never spans multiple lines" $
+      Util.shortErr (toException (ErrorCall "one\ntwo\nthree"))
+        `shouldBe` "one two three"
+
+    it "truncates an over-long message to 200 characters" $
+      length (Util.shortErr (toException (ErrorCall (replicate 500 'x'))))
+        `shouldBe` 200
+
+  describe "trySync" $ do
+    it "returns the value when nothing throws" $ do
+      r <- Util.trySync (pure (42 :: Int))
+      case r of
+        Right v -> v `shouldBe` 42
+        Left e  -> expectationFailure ("unexpected exception: " <> show e)
+
+    it "catches a synchronous exception" $ do
+      r <- Util.trySync (throwIO (userError "boom") :: IO ())
+      case r of
+        Left e  -> show e `shouldContain` "boom"
+        Right _ -> expectationFailure "expected the exception to be caught"
+
+    -- mapConcurrently cancels its siblings as soon as one action throws;
+    -- swallowing that cancellation would record it as an ordinary failed
+    -- review and persist it for a retry never actually attempted.
+    it "rethrows an asynchronous exception instead of swallowing it" $ do
+      outcome <- try (Util.trySync (throwIO ThreadKilled :: IO ()))
+                   :: IO (Either SomeException (Either SomeException ()))
+      case outcome of
+        Left _  -> pure ()
+        Right _ -> expectationFailure "trySync swallowed an asynchronous exception"
+
+--------------------------------------------------------------------------------
+-- JsonStore
+--------------------------------------------------------------------------------
+
+withTempDir :: (FilePath -> IO a) -> IO a
+withTempDir act = do
+  base  <- getTemporaryDirectory
+  stamp <- (filter isDigit . show) <$> getCurrentTime
+  let dir = base </> ("kroki-test-" <> stamp)
+  bracket
+    (createDirectoryIfMissing True dir >> pure dir)
+    removeDirectoryRecursive
+    act
+
+jsonStoreSpec :: Spec
+jsonStoreSpec = describe "JsonStore" $ do
+
+  it "round-trips a saved value" $ withTempDir $ \dir -> do
+    let path = dir </> "state.json"
+    JsonStore.saveJsonFile path ([1, 2, 3] :: [Int])
+    loaded <- JsonStore.loadJsonFile [] path
+    loaded `shouldBe` ([1, 2, 3] :: [Int])
+
+  -- Regression: loadJsonFile used to be a lazy BL.readFile whose handle was
+  -- still open and unforced when saveJsonFile truncated the very same path
+  -- for writing, so the value being encoded was served from the file *after*
+  -- truncation. Merging a new entry into a non-empty file silently dropped
+  -- data -- exactly the pending-review retry path.
+  it "does not lose existing entries when merging into the same file" $
+    withTempDir $ \dir -> do
+      let path = dir </> "pending.json"
+      JsonStore.saveJsonFile path ([1, 2] :: [Int])
+      existing <- JsonStore.loadJsonFile [] path
+      JsonStore.saveJsonFile path (existing <> ([3] :: [Int]))
+      loaded <- JsonStore.loadJsonFile [] path
+      loaded `shouldBe` ([1, 2, 3] :: [Int])
+
+  it "falls back on a missing file" $ withTempDir $ \dir ->
+    JsonStore.loadJsonFile [7 :: Int] (dir </> "nope.json") >>= (`shouldBe` [7])
+
+  it "falls back on a corrupt file" $ withTempDir $ \dir -> do
+    let path = dir </> "corrupt.json"
+    writeFile path "{not json"
+    JsonStore.loadJsonFile [7 :: Int] path >>= (`shouldBe` [7])
+
+  it "leaves no temp file behind after a successful write" $ withTempDir $ \dir -> do
+    let path = dir </> "state.json"
+    JsonStore.saveJsonFile path ([1] :: [Int])
+    doesFileExist (path <> ".tmp") >>= (`shouldBe` False)
+
+  it "keeps the previous contents readable across a rewrite" $ withTempDir $ \dir -> do
+    let path = dir </> "state.json"
+    JsonStore.saveJsonFile path ([1, 2] :: [Int])
+    JsonStore.saveJsonFile path ([3, 4] :: [Int])
+    JsonStore.loadJsonFile [] path >>= (`shouldBe` ([3, 4] :: [Int]))
+
+  it "creates missing parent directories" $ withTempDir $ \dir -> do
+    let path = dir </> "nested" </> "deep" </> "state.json"
+    JsonStore.saveJsonFile path ([1] :: [Int])
+    JsonStore.loadJsonFile [] path >>= (`shouldBe` ([1] :: [Int]))

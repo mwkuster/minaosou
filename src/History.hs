@@ -17,15 +17,12 @@ module History
   ) where
 
 import qualified Api
+import JsonStore (configFilePath, loadJsonFile, saveJsonFile)
 
-import Control.Exception (IOException, catch)
-import Data.Aeson (FromJSON(..), ToJSON(..), decode, encode, object, withObject, (.:), (.:?), (.!=), (.=))
-import qualified Data.ByteString.Lazy as BL
+import Data.Aeson (FromJSON(..), ToJSON(..), object, withObject, (.:), (.:?), (.!=), (.=))
 import Data.List (foldl')
 import qualified Data.Map.Strict as M
 import Data.Time (UTCTime)
-import System.Directory (createDirectoryIfMissing, getXdgDirectory, XdgDirectory(XdgConfig))
-import System.FilePath ((</>))
 
 data LeechEntry = LeechEntry
   { leSubjectId    :: Api.SubjectId
@@ -64,29 +61,21 @@ instance FromJSON LeechEntry where
       <*> o .:? "relapses" .!= 0
 
 historyPath :: IO FilePath
-historyPath = do
-  base <- getXdgDirectory XdgConfig "kroki"
-  pure (base </> "leeches.json")
+historyPath = configFilePath "leeches.json"
 
 -- | Soft-fails to an empty history on a missing or corrupt file, matching
 -- Config.loadConfig's convention (never crash a study session over this).
 loadHistory :: IO (M.Map Api.SubjectId LeechEntry)
 loadHistory = do
   path <- historyPath
-  content <- BL.readFile path `catch` \(_ :: IOException) -> pure BL.empty
-  pure $ case decode content of
-    Just entries -> M.fromList [ (leSubjectId e, e) | e <- entries ]
-    Nothing      -> M.empty
+  entries <- loadJsonFile [] path
+  pure (M.fromList [ (leSubjectId e, e) | e <- entries ])
 
--- | Best-effort write; a failure here must not crash session-end.
+-- | Best-effort, atomic write; a failure here must not crash session-end.
 saveHistory :: M.Map Api.SubjectId LeechEntry -> IO ()
 saveHistory history = do
   path <- historyPath
-  base <- getXdgDirectory XdgConfig "kroki"
-  ( do
-      createDirectoryIfMissing True base
-      BL.writeFile path (encode (M.elems history))
-    ) `catch` \(_ :: IOException) -> pure ()
+  saveJsonFile path (M.elems history)
 
 -- | Add this session's wrong counts on top of existing entries, bumping
 -- last_seen to now. Only pass subjects with at least one wrong answer this

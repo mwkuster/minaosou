@@ -16,15 +16,12 @@ module PendingReviews
   ) where
 
 import qualified Api
+import JsonStore (configFilePath, loadJsonFile, saveJsonFile)
 
-import Control.Exception (IOException, catch)
-import Data.Aeson (FromJSON(..), ToJSON(..), decode, encode, object, withObject, (.:), (.=))
-import qualified Data.ByteString.Lazy as BL
+import Data.Aeson (FromJSON(..), ToJSON(..), object, withObject, (.:), (.=))
 import Data.List (unionBy)
 import Data.Function (on)
 import Data.Time (UTCTime)
-import System.Directory (createDirectoryIfMissing, getXdgDirectory, XdgDirectory(XdgConfig))
-import System.FilePath ((</>))
 
 data PendingReview = PendingReview
   { prAssignmentId :: Api.AssignmentId
@@ -50,27 +47,18 @@ instance FromJSON PendingReview where
       <*> o .: "created_at"
 
 pendingReviewsPath :: IO FilePath
-pendingReviewsPath = do
-  base <- getXdgDirectory XdgConfig "kroki"
-  pure (base </> "pending_reviews.json")
+pendingReviewsPath = configFilePath "pending_reviews.json"
 
 -- | Soft-fails to an empty list on a missing or corrupt file, matching
 -- Config.loadConfig's and History.loadHistory's convention.
 loadPendingReviews :: IO [PendingReview]
-loadPendingReviews = do
-  path <- pendingReviewsPath
-  content <- BL.readFile path `catch` \(_ :: IOException) -> pure BL.empty
-  pure (maybe [] id (decode content))
+loadPendingReviews = loadJsonFile [] =<< pendingReviewsPath
 
--- | Best-effort write; a failure here must not crash the session.
+-- | Best-effort, atomic write; a failure here must not crash the session.
 savePendingReviews :: [PendingReview] -> IO ()
 savePendingReviews prs = do
   path <- pendingReviewsPath
-  base <- getXdgDirectory XdgConfig "kroki"
-  ( do
-      createDirectoryIfMissing True base
-      BL.writeFile path (encode prs)
-    ) `catch` \(_ :: IOException) -> pure ()
+  saveJsonFile path prs
 
 -- | Merge freshly-failed submissions into an existing pending list, keyed by
 -- assignment id -- an assignment can only be due once at a time, so if it's

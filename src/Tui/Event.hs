@@ -9,13 +9,14 @@ module Tui.Event
 
 import qualified Api
 import Tui.State
+import Util (shortErr)
 
 import Brick
 import Brick.BChan (writeBChan)
 import qualified Graphics.Vty as V
 
 import Control.Concurrent (forkIO)
-import Control.Exception (SomeException, displayException, try)
+import Control.Exception (SomeException, try)
 import Control.Monad (void)
 import Control.Monad.IO.Class (liftIO)
 import Data.Time (UTCTime)
@@ -81,13 +82,6 @@ openReviewSchedule refreshFn = do
     Left (e :: SomeException) ->
       modify $ \st -> st
         { stError = Just (T.pack ("review schedule unavailable: " <> shortErr e)) }
-
--- | Truncate exception text so a long backtrace doesn't blow up the layout.
-shortErr :: SomeException -> String
-shortErr e =
-  let msg = displayException e
-      oneLine = takeWhile (/= '\n') msg
-  in if length oneLine > 200 then take 197 oneLine <> "..." else oneLine
 
 handleOverlay :: V.Event -> EventM Name AppState ()
 handleOverlay ev =
