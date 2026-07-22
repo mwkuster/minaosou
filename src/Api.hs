@@ -21,6 +21,7 @@ module Api
   , Assignment(..)
   , getAvailableAssignments
   , getAssignmentsBySubjectIds
+  , getStillAvailableAssignmentIds
   , PagedEnvelope(..)
 
   , SubjectType(..)
@@ -35,6 +36,8 @@ import Data.Aeson.Types (Parser)
 import qualified Data.Aeson.Key as Key
 import Data.List (sortOn)
 import Data.Maybe (catMaybes, fromMaybe)
+import Data.Set (Set)
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time (UTCTime(..), addUTCTime)
@@ -350,6 +353,32 @@ getAssignmentsBySubjectIds :: String -> [SubjectId] -> IO [Assignment]
 getAssignmentsBySubjectIds token ids =
   map toAssignment
     <$> fetchBySubjectIdsChunked token (https "api.wanikani.com" /: "v2" /: "assignments") "subject_ids" ids
+
+-- | Which of the given assignment ids are still due for review right now
+-- (same "available" filter as 'getAvailableAssignments'). Used to detect a
+-- create-review POST that actually reached WaniKani despite the client
+-- seeing a connection failure on the /response/ -- resubmitting that one
+-- would just be rejected by WaniKani forever, since an assignment stops
+-- being "available" the moment a review is recorded for it.
+getStillAvailableAssignmentIds :: String -> UTCTime -> [AssignmentId] -> IO (Set AssignmentId)
+getStillAvailableAssignmentIds _ _ [] = pure Set.empty
+getStillAvailableAssignmentIds token now ids = do
+  let nowParam = T.pack (iso8601Show now)
+      fetchAssignmentIdsChunk idsChunk = runReq retryingHttpConfig $ do
+        let idsParam = T.intercalate "," (map (T.pack . show . unAssignmentId) idsChunk)
+        resp <- req
+          GET
+          (https "api.wanikani.com" /: "v2" /: "assignments")
+          NoReqBody
+          jsonResponse
+          ( "ids"              =: idsParam
+         <> "available_before" =: nowParam
+         <> "in_review"        =: True
+         <> "hidden"           =: False
+         <> apiOpts token )
+        pure (map toAssignment (peData (responseBody resp :: PagedEnvelope AssignmentData)))
+  results <- mapM fetchAssignmentIdsChunk (chunkN 100 ids)
+  pure (Set.fromList (map asId (concat results)))
 
 --------------------------------------------------------------------------------
 -- Subjects (to show prompts + accepted answers)

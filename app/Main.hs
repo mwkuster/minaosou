@@ -17,11 +17,18 @@ import System.Exit (die)
 
 import Data.Time (getCurrentTime, getCurrentTimeZone, utcToLocalTime, TimeZone, UTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
-import Data.List (nub, sortOn)
+import Data.List (nub, partition, sortOn)
 import Data.Maybe (fromMaybe)
 import Data.Map.Strict qualified as M
 import qualified Data.Set as Set
 import qualified Data.Text as T
+
+-- | TEMPORARY debug tracing: writes to a file instead of stdout because
+-- these calls happen inside the Brick alternate-screen session, where
+-- stdout writes get overwritten by Vty's own redraws and never show up in
+-- the terminal scrollback.
+debugLog :: String -> IO ()
+debugLog msg = appendFile "/tmp/kroki_debug.log" (msg <> "\n")
 
 main :: IO ()
 main = do
@@ -136,24 +143,49 @@ main = do
         user <- Api.getUser t
         summary <- Api.getSummary t
 
-        -- Resubmit anything left over from a previous run's network trouble,
-        -- using each item's original 'prCreatedAt' (the review really
-        -- happened then, not now). Returns the assignment ids that are
-        -- still failing after this attempt, so this run's fresh batch
-        -- doesn't ask about them again.
-        let retryPendingReviews = do
+        -- A create-review POST can throw on the client side (timeout,
+        -- connection closed) even though WaniKani already processed it --
+        -- the response just never made it back. Resubmitting that one is
+        -- pointless: the assignment is no longer "available" once a review
+        -- is recorded for it, so WaniKani will keep rejecting the retry
+        -- forever. Split out any "failure" that's actually already recorded
+        -- on WaniKani's side so it gets dropped instead of stuck retrying.
+        let dropAlreadyRecorded failed
+              | null failed = pure (failed, 0 :: Int)
+              | otherwise = do
+                  now' <- getCurrentTime
+                  stillAvailable <- Api.getStillAvailableAssignmentIds t now'
+                    (map PendingReviews.prAssignmentId failed)
+                  let (genuine, alreadyRecorded) =
+                        partition
+                          (\p -> PendingReviews.prAssignmentId p `Set.member` stillAvailable)
+                          failed
+                  pure (genuine, length alreadyRecorded)
+
+            -- Resubmit anything left over from a previous run's network
+            -- trouble, using each item's original 'prCreatedAt' (the review
+            -- really happened then, not now). Returns the assignment ids
+            -- that are still failing after this attempt, so this run's
+            -- fresh batch doesn't ask about them again.
+            retryPendingReviews = do
               pending <- PendingReviews.loadPendingReviews
               if null pending
                 then pure Set.empty
                 else do
-                  outcomes <- mapConcurrentlyN maxParallelSubmits postPendingReview pending
+                  (toRetry, droppedN) <- dropAlreadyRecorded pending
+                  outcomes <- mapConcurrentlyN maxParallelSubmits postPendingReview toRetry
                   let stillFailing = [ p | (p, Left _) <- outcomes ]
                       succeededN   = length outcomes - length stillFailing
                   PendingReviews.savePendingReviews stillFailing
                   putStrLn $
-                    "Retrying " <> show (length pending)
+                    "Retrying " <> show (length toRetry)
                     <> " review(s) that failed to reach WaniKani last time: "
                     <> show succeededN <> " succeeded"
+                    <> ( if droppedN == 0
+                           then ""
+                           else ", " <> show droppedN
+                             <> " were already recorded on WaniKani (dropped)"
+                       )
                     <> ( if null stillFailing
                            then "."
                            else ", " <> show (length stillFailing)
@@ -199,6 +231,7 @@ main = do
                         pure (now', summary')
                   history <- History.loadHistory
                   let priorWrong = History.historyCounts history
+                  putStrLn "[DEBUG] entering Tui.runStudyTui"
                   (wantsMore, sessionCounts) <-
                     Tui.runStudyTui
                       Tui.StudyConfig
@@ -209,53 +242,95 @@ main = do
                         }
                       user summary now tz allSubjMap subjToAsg priorWrong subjects
                       refreshSummary (submitBatch asgToInfo)
+                  putStrLn ("[DEBUG] Tui.runStudyTui returned, wantsMore=" <> show wantsMore <> " sessionCounts=" <> show (length sessionCounts))
                   now3 <- getCurrentTime
                   History.saveHistory (History.mergeSession now3 sessionCounts history)
+                  putStrLn "[DEBUG] History.saveHistory completed"
                   if wantsMore then runBatch else pure ()
 
-            submitBatch asgToInfo subs = do
-              ts <- getCurrentTime
+            -- The actual submission work, isolated so 'submitBatch' can wrap
+            -- it in its own 'try' -- everything here runs inside a forked
+            -- thread with no other safety net, and 'PendingReviews.
+            -- savePendingReviews' only catches 'IOException' specifically,
+            -- so any other exception type (a bug, an unexpected library
+            -- exception, anything not anticipated) would otherwise abort
+            -- silently with no record of where it happened.
+            submitBatchCore asgToInfo ts subs = do
               outcomes <- mapConcurrentlyN maxParallelSubmits (postReview ts) subs
+              debugLog ("[DEBUG] mapConcurrentlyN returned " <> show (length outcomes) <> " outcomes")
               let details   = map (fmtSub asgToInfo) outcomes
                   succeeded = length [() | (_, Right _) <- outcomes]
                   failed    = length outcomes - succeeded
-                  submitMsg = "Submitted " <> show succeeded
-                           <> (if failed == 0
-                                then ""
-                                else " (" <> show failed <> " failed, saved for automatic retry next run)")
                   newlyFailed =
                     [ PendingReviews.PendingReview (Tui.subAssignmentId s) (Tui.subWrongMeaning s) (Tui.subWrongReading s) ts
                     | (s, Left _) <- outcomes
                     ]
-              if null newlyFailed
+              debugLog ("[DEBUG] succeeded=" <> show succeeded <> " failed=" <> show failed <> " newlyFailed=" <> show (length newlyFailed))
+              -- Some of these "failures" may actually have been recorded by
+              -- WaniKani already (the response was lost after a successful
+              -- POST) -- don't queue those for a retry that can only fail.
+              (genuinelyFailed, droppedN) <- dropAlreadyRecorded newlyFailed
+              debugLog ("[DEBUG] after availability check: genuinelyFailed=" <> show (length genuinelyFailed) <> " droppedN=" <> show droppedN)
+              let submitMsg = "Submitted " <> show succeeded
+                           <> (if failed == 0
+                                then ""
+                                else " (" <> show failed <> " failed"
+                                  <> (if droppedN == 0
+                                        then ""
+                                        else ", " <> show droppedN <> " already recorded on WaniKani")
+                                  <> (if null genuinelyFailed
+                                        then ""
+                                        else ", saved for automatic retry next run")
+                                  <> ")")
+              if null genuinelyFailed
                 then pure ()
                 else do
+                  path <- PendingReviews.pendingReviewsPath
+                  debugLog ("[DEBUG] about to save " <> show (length genuinelyFailed) <> " pending reviews to " <> path)
                   existingPending <- PendingReviews.loadPendingReviews
-                  PendingReviews.savePendingReviews (PendingReviews.addPending existingPending newlyFailed)
-              now2 <- getCurrentTime
-              -- The reviews above are already posted; don't let a network
-              -- blip on this trailing status check throw away those
-              -- per-item results (that used to surface as a bare "submit
-              -- failed" with no details at all).
-              statusResult <- try (do
-                summary2 <- Api.getSummary t
-                as2      <- Api.getAvailableAssignments t now2 n
-                pure (summary2, as2)) :: IO (Either SomeException (Api.Summary, [Api.Assignment]))
-              let (msg, hasMore) = case statusResult of
-                    Right (summary2, as2) ->
-                      ( submitMsg <> ". Reviews available now: "
-                          <> show (Api.reviewsAvailableNow now2 summary2)
-                      , not (null as2)
-                      )
-                    Left e ->
-                      ( submitMsg <> ". (could not refresh review count: " <> shortErr e <> ")"
-                      , False
-                      )
-              pure Tui.SubmitResult
-                { Tui.srMessage = msg
-                , Tui.srHasMore = hasMore
-                , Tui.srDetails = details
-                }
+                  debugLog ("[DEBUG] loaded " <> show (length existingPending) <> " existing pending reviews")
+                  PendingReviews.savePendingReviews (PendingReviews.addPending existingPending genuinelyFailed)
+                  debugLog "[DEBUG] savePendingReviews call completed"
+              pure (details, submitMsg)
+
+            submitBatch asgToInfo subs = do
+              debugLog ("[DEBUG] submitBatch starting, " <> show (length subs) <> " submissions")
+              ts <- getCurrentTime
+              coreResult <- try (submitBatchCore asgToInfo ts subs)
+                              :: IO (Either SomeException ([String], String))
+              case coreResult of
+                Left e -> do
+                  debugLog ("[DEBUG] submitBatch CORE THREW: " <> shortErr e)
+                  pure Tui.SubmitResult
+                    { Tui.srMessage = "Submit failed unexpectedly: " <> shortErr e
+                    , Tui.srHasMore = False
+                    , Tui.srDetails = []
+                    }
+                Right (details, submitMsg) -> do
+                  now2 <- getCurrentTime
+                  -- The reviews above are already posted; don't let a
+                  -- network blip on this trailing status check throw away
+                  -- those per-item results (that used to surface as a bare
+                  -- "submit failed" with no details at all).
+                  statusResult <- try (do
+                    summary2 <- Api.getSummary t
+                    as2      <- Api.getAvailableAssignments t now2 n
+                    pure (summary2, as2)) :: IO (Either SomeException (Api.Summary, [Api.Assignment]))
+                  let (msg, hasMore) = case statusResult of
+                        Right (summary2, as2) ->
+                          ( submitMsg <> ". Reviews available now: "
+                              <> show (Api.reviewsAvailableNow now2 summary2)
+                          , not (null as2)
+                          )
+                        Left e ->
+                          ( submitMsg <> ". (could not refresh review count: " <> shortErr e <> ")"
+                          , False
+                          )
+                  pure Tui.SubmitResult
+                    { Tui.srMessage = msg
+                    , Tui.srHasMore = hasMore
+                    , Tui.srDetails = details
+                    }
 
             postReview ts s = do
               r <- tryCreateReview t
@@ -263,6 +338,9 @@ main = do
                      (Tui.subWrongMeaning s)
                      (Tui.subWrongReading s)
                      ts
+              case r of
+                Left e -> debugLog ("[DEBUG] postReview FAILED for assignment " <> show (Tui.subAssignmentId s) <> ": " <> shortErr e)
+                Right _ -> pure ()
               pure (s, r)
 
         runBatch
