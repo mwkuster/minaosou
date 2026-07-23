@@ -495,11 +495,27 @@ historySpec = describe "History" $ do
       -- but excluded from the active leech list
       M.null (History.activeLeeches after) `shouldBe` True
 
-    it "resets (not adds) counts for a leech still missed this round" $ do
+    it "adds this round's misses to a leech still missed in practice" $ do
       let existing = History.mergeSession t1 [(Api.SubjectId 1, 5, 5)] M.empty
           after    = History.applyPracticeSession t2 [Api.SubjectId 1]
                        [(Api.SubjectId 1, 1, 0)] existing
-      History.historyCounts after `shouldBe` M.singleton (Api.SubjectId 1) (1, 0)
+      -- meaning miss raises only the meaning counter; reading is unchanged
+      History.historyCounts after `shouldBe` M.singleton (Api.SubjectId 1) (6, 5)
+
+    it "raises the reading counter for a reading miss in practice" $ do
+      let existing = History.mergeSession t1 [(Api.SubjectId 1, 2, 3)] M.empty
+          after    = History.applyPracticeSession t2 [Api.SubjectId 1]
+                       [(Api.SubjectId 1, 0, 2)] existing
+      History.historyCounts after `shouldBe` M.singleton (Api.SubjectId 1) (2, 5)
+
+    it "keeps a repeatedly-failed leech active and climbing in weight" $ do
+      let existing = History.mergeSession t1 [(Api.SubjectId 1, 1, 0)] M.empty
+          Just before = M.lookup (Api.SubjectId 1) existing
+          after    = History.applyPracticeSession t2 [Api.SubjectId 1]
+                       [(Api.SubjectId 1, 2, 1)] existing
+          Just afterE = M.lookup (Api.SubjectId 1) after
+      History.leRetired afterE `shouldBe` False
+      (History.leechWeight afterE > History.leechWeight before) `shouldBe` True
 
     it "bumps last_seen for a leech that is kept" $ do
       let existing = History.mergeSession t1 [(Api.SubjectId 1, 1, 0)] M.empty

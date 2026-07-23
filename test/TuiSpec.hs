@@ -187,20 +187,22 @@ spec = do
 
     it "records this session's misses once the batch was submitted" $
       Tui.recordableWrongCounts stAfter { Tui.stSubmitAttempted = True }
-        `shouldBe` [(sid 1, 2, 1)]
+        `shouldBe` Just [(sid 1, 2, 1)]
 
-    it "records nothing when the session was abandoned before submitting" $
+    it "records nothing (Nothing) when abandoned before submitting" $
       Tui.recordableWrongCounts stAfter { Tui.stSubmitAttempted = False }
-        `shouldBe` []
+        `shouldBe` Nothing
 
     it "still reports the raw session counts regardless of submission" $
       Tui.sessionWrongCounts stAfter { Tui.stSubmitAttempted = False }
         `shouldBe` [(sid 1, 2, 1)]
 
-    it "records nothing when nothing was missed, even after submitting" $
+    -- Distinct from abandonment: a completed round with no misses is
+    -- 'Just []', which still lets applyPracticeSession graduate its subjects.
+    it "records an empty (Just []) completed round when nothing was missed" $
       Tui.recordableWrongCounts
         (stateWith (M.fromList [ (sid 1, Tui.Progress True True True 0 0) ]) M.empty)
-          { Tui.stSubmitAttempted = True } `shouldBe` []
+          { Tui.stSubmitAttempted = True } `shouldBe` Just []
 
   describe "checkAnswer" $ do
 

@@ -112,16 +112,21 @@ mergeSession now sessionCounts existing = foldl' step existing sessionCounts
           }
 
 -- | After a leech-only practice session ("kroki leeches --study"), update
--- each practiced subject's entry: answered fully correctly this round means
--- it "graduated" -- retire it (excluded from the leech list and future
--- practice queues) rather than deleting its record, so a later relapse in a
--- real review (see 'mergeSession') can still be recognised and weighted.
--- Otherwise (still missed), reset its counts to just this round's mistakes
--- and make sure it's active. Unlike 'mergeSession' (which accumulates real
--- WaniKani review history forever, since that's a record of actual SRS
--- performance), practice performance shouldn't pile indefinitely on top of
--- past mistakes -- the whole point is to let a leech drop off the active
--- list once it's clean.
+-- each practiced subject's entry:
+--
+--   * answered fully correctly this round -> it "graduated": retire it
+--     (excluded from the leech list and future practice queues) rather than
+--     deleting the record, so a later relapse in a real review (see
+--     'mergeSession') can still be recognised and weighted;
+--   * still missed this round -> /add/ this round's mistakes to its counts
+--     (per type: a meaning miss raises the meaning counter, a reading miss
+--     the reading counter) and keep it active. A leech you keep failing even
+--     in dedicated practice is a worse leech, so it should climb the
+--     worst-first ordering, not merely hold its old score.
+--
+-- Only ever called for a completed practice session (see
+-- 'Tui.recordableWrongCounts'), so every practiced subject was actually
+-- answered and "absent from the miss list" reliably means "answered clean".
 applyPracticeSession
   :: UTCTime
   -> [Api.SubjectId]
@@ -138,8 +143,8 @@ applyPracticeSession now practiced sessionCounts existing =
       Just (wm, wr) ->
         M.adjust
           (\e -> e
-            { leWrongMeaning = wm
-            , leWrongReading = wr
+            { leWrongMeaning = leWrongMeaning e + wm
+            , leWrongReading = leWrongReading e + wr
             , leLastSeen     = now
             , leRetired      = False
             })

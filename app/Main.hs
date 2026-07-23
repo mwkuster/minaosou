@@ -120,7 +120,12 @@ main = do
                       user summary0 now tz allSubjMap subjToAsg priorWrong leechSubjects
                       refreshSummary submitPractice
                   now2 <- getCurrentTime
-                  let history' = History.applyPracticeSession now2 batchIds sessionCounts history
+                  -- 'Nothing' means the practice round was abandoned before
+                  -- finishing; leave the leech history untouched rather than
+                  -- retiring subjects that were never fully answered.
+                  let history' = case sessionCounts of
+                        Nothing -> history
+                        Just cs -> History.applyPracticeSession now2 batchIds cs history
                   History.saveHistory history'
                   if wantsMore && not (null restIds)
                     then loop history' restIds
@@ -246,9 +251,13 @@ main = do
                         }
                       user summary now tz allSubjMap subjToAsg priorWrong subjects
                       refreshSummary (submitBatch asgToInfo)
-                  putStrLn ("[DEBUG] Tui.runStudyTui returned, wantsMore=" <> show wantsMore <> " sessionCounts=" <> show (length sessionCounts))
+                  putStrLn ("[DEBUG] Tui.runStudyTui returned, wantsMore=" <> show wantsMore <> " sessionCounts=" <> show (fmap length sessionCounts))
                   now3 <- getCurrentTime
-                  History.saveHistory (History.mergeSession now3 sessionCounts history)
+                  -- 'Nothing' means the batch was never submitted; don't
+                  -- record its misses in the leech history.
+                  case sessionCounts of
+                    Nothing -> pure ()
+                    Just cs -> History.saveHistory (History.mergeSession now3 cs history)
                   putStrLn "[DEBUG] History.saveHistory completed"
                   if wantsMore then runBatch else pure ()
 

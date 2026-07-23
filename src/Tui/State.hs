@@ -329,17 +329,22 @@ sessionWrongCounts st =
   ]
 
 -- | The wrong-answer counts that may be written to the cross-session leech
--- history: this session's, but only if the user actually went through with
--- submitting the batch.
+-- history, or 'Nothing' if this session must not touch the history at all.
 --
--- Quitting mid-session leaves the reviews unrecorded on WaniKani, so the
--- very same items come back in the next run. Persisting their misses anyway
--- meant the same mistake was counted once per abandoned attempt, inflating
--- a subject's leech weight without the user ever having missed it twice.
-recordableWrongCounts :: AppState -> [(Api.SubjectId, Int, Int)]
+-- 'Nothing' means the session was abandoned before submitting: the reviews
+-- were never recorded (on WaniKani, or as a completed practice round), so
+-- the very same items come back next run. Persisting their misses anyway
+-- counted one mistake once per abandoned attempt; worse, for a practice
+-- session -- where 'History.applyPracticeSession' is driven by the whole
+-- batch -- an empty count list would have retired every practised subject.
+--
+-- @Just cs@ means the session completed; @cs@ may still be empty (finished
+-- with nothing missed), which is distinct from abandonment and must be
+-- recorded as such (e.g. so a clean practice round graduates its subjects).
+recordableWrongCounts :: AppState -> Maybe [(Api.SubjectId, Int, Int)]
 recordableWrongCounts st
-  | stSubmitAttempted st = sessionWrongCounts st
-  | otherwise            = []
+  | stSubmitAttempted st = Just (sessionWrongCounts st)
+  | otherwise            = Nothing
 
 --------------------------------------------------------------------------------
 -- Setup helpers

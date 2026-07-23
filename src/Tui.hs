@@ -32,7 +32,7 @@ runStudyTui
   -> [Api.Subject]
   -> IO (UTCTime, Api.Summary)
   -> ([Submission] -> IO SubmitResult)
-  -> IO (Bool, [(Api.SubjectId, Int, Int)])
+  -> IO (Bool, Maybe [(Api.SubjectId, Int, Int)])
 runStudyTui cfg user summary now tz allSubjects subjToAsg priorWrong subjects refreshFn submitFn = do
   let queue0 = concatMap mkQuestions subjects
       prog0  = M.fromList [ (Api.subjId s, initProgress s) | s <- subjects ]
