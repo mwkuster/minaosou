@@ -78,12 +78,24 @@ main = hspec $ do
       it "nn → ん (not んん)"   $ Romaji.romajiToHiragana "nn"     `shouldBe` "ん"
       it "trailing n → ん"      $ Romaji.romajiToHiragana "n"      `shouldBe` "ん"
       it "n before consonant"   $ Romaji.romajiToHiragana "nka"    `shouldBe` "んか"
-      it "nn before vowel (nna)"$ Romaji.romajiToHiragana "nna"    `shouldBe` "んな"
       it "n before vowel stays" $ Romaji.romajiToHiragana "na"     `shouldBe` "な"
-      it "kanna → かんな"       $ Romaji.romajiToHiragana "kanna"  `shouldBe` "かんな"
       it "denwa → でんわ"       $ Romaji.romajiToHiragana "denwa"  `shouldBe` "でんわ"
       it "n'a → んあ"           $ Romaji.romajiToHiragana "n'a"    `shouldBe` "んあ"
       it "shinnsei → しんせい"   $ Romaji.romajiToHiragana "shinnsei"    `shouldBe` "しんせい"
+
+      -- wanakana / WaniKani convention: "nn" is a committed ん (both n's
+      -- consumed), so a vowel after it stands alone rather than joining the
+      -- second n into a な-row syllable.
+      describe "nn consumes both n's (a following vowel stands alone)" $ do
+        it "nna → んあ"            $ Romaji.romajiToHiragana "nna"    `shouldBe` "んあ"
+        it "kanna → かんあ"        $ Romaji.romajiToHiragana "kanna"  `shouldBe` "かんあ"
+        it "onna → おんあ"         $ Romaji.romajiToHiragana "onna"   `shouldBe` "おんあ"
+        -- and the ways to actually get ん + な-row:
+        it "on'na → おんな"        $ Romaji.romajiToHiragana "on'na"  `shouldBe` "おんな"
+        it "onnna → おんな"        $ Romaji.romajiToHiragana "onnna"  `shouldBe` "おんな"
+        -- 全員: "zennin" and "zen'in" now converge on ぜんいん
+        it "zennin → ぜんいん"     $ Romaji.romajiToHiragana "zennin" `shouldBe` "ぜんいん"
+        it "zen'in → ぜんいん"     $ Romaji.romajiToHiragana "zen'in" `shouldBe` "ぜんいん"
 
     describe "っ (small tsu / doubled consonant)" $ do
       it "kka → っか" $ Romaji.romajiToHiragana "kka"  `shouldBe` "っか"
@@ -121,8 +133,14 @@ main = hspec $ do
 
     describe "nn handling" $ do
       it "nn alone → ん"   $ Romaji.romajiToHiraganaLive "nn"   `shouldBe` "ん"
-      it "nna → んな"      $ Romaji.romajiToHiraganaLive "nna"  `shouldBe` "んな"
-      it "kanna → かんな"  $ Romaji.romajiToHiraganaLive "kanna" `shouldBe` "かんな"
+      it "nna → んあ"      $ Romaji.romajiToHiraganaLive "nna"  `shouldBe` "んあ"
+      it "kanna → かんあ"  $ Romaji.romajiToHiraganaLive "kanna" `shouldBe` "かんあ"
+      -- Live keeps a trailing lone "n" pending (the user might still type
+      -- "na", "ni", …), so mid-type "zennin" shows the last n as-is. It
+      -- resolves to ん on submission -- see the romajiToHiragana "zennin →
+      -- ぜんいん" case above, which is what checkAnswer/normReading use.
+      it "zennin → ぜんい + pending n" $
+        Romaji.romajiToHiraganaLive "zennin" `shouldBe` "ぜんいn"
 
     describe "っ (doubled consonant)" $ do
       it "kka → っか" $ Romaji.romajiToHiraganaLive "kka" `shouldBe` "っか"

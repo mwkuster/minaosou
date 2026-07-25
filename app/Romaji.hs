@@ -47,19 +47,16 @@ smallTsu t =
     Nothing -> Nothing
 
 -- Handle 'n' as ん when:
---  - "n'" explicitly
---  - "nn" at end of string → single ん (both n's consumed)
---  - "nn" + more chars → ん, leave second n for next syllable (e.g. "nna" → んな)
---  - "n" before a non-vowel and not 'y'
+--  - "n'" explicitly (→ ん, both characters consumed)
+--  - "nn" (→ ん, both n's consumed) -- matching wanakana / WaniKani. A vowel
+--    that follows therefore stands on its own: "onna" → おんあ, "zennin" →
+--    ぜんいん. To write ん immediately before a な-row syllable, separate them
+--    with an apostrophe or a third n: "on'na" / "onnna" → おんな.
+--  - a lone "n" before a non-vowel (and not 'y'), or at end of input
 parseN :: Text -> Maybe Text
 parseN t
   | "n'" `T.isPrefixOf` t = Just (T.drop 2 t)
-  | "nn" `T.isPrefixOf` t =
-      case T.uncons (T.drop 2 t) of
-        Nothing     -> Just (T.drop 2 t)  -- "nn" alone → ん (consume both)
-        Just (c, _)
-          | c `elem` ("aiueoy" :: String) -> Just (T.drop 1 t)  -- "nna" → ん + na
-          | otherwise                     -> Just (T.drop 2 t)  -- "nnk" → ん + k (consume both)
+  | "nn" `T.isPrefixOf` t = Just (T.drop 2 t)
   | "n"  `T.isPrefixOf` t =
       case T.uncons (T.drop 1 t) of
         Nothing     -> Just ""   -- trailing n
@@ -165,12 +162,7 @@ liveConvert t
 liveParseN :: Text -> Maybe (Text, Text)
 liveParseN t
   | "n'"  `T.isPrefixOf` t = Just ("ん", T.drop 2 t)
-  | "nn"  `T.isPrefixOf` t =
-      case T.uncons (T.drop 2 t) of
-        Nothing     -> Just ("ん", T.drop 2 t)  -- "nn" alone → ん (consume both)
-        Just (c, _)
-          | c `elem` ("aiueoy" :: String) -> Just ("ん", T.drop 1 t)  -- "nna" → ん + na
-          | otherwise                     -> Just ("ん", T.drop 2 t)  -- "nnk" → ん + k (consume both)
+  | "nn"  `T.isPrefixOf` t = Just ("ん", T.drop 2 t)  -- both n's → ん (see 'parseN')
   | "n"   `T.isPrefixOf` t =
       case T.uncons (T.drop 1 t) of
         Nothing     -> Nothing   -- trailing n: keep as pending
