@@ -23,13 +23,6 @@ import Data.Map.Strict qualified as M
 import qualified Data.Set as Set
 import qualified Data.Text as T
 
--- | TEMPORARY debug tracing: writes to a file instead of stdout because
--- these calls happen inside the Brick alternate-screen session, where
--- stdout writes get overwritten by Vty's own redraws and never show up in
--- the terminal scrollback.
-debugLog :: String -> IO ()
-debugLog msg = appendFile "/tmp/kroki_debug.log" (msg <> "\n")
-
 main :: IO ()
 main = do
   opts <- Cli.parseCli
@@ -240,7 +233,6 @@ main = do
                         pure (now', summary')
                   history <- History.loadHistory
                   let priorWrong = History.historyCounts history
-                  putStrLn "[DEBUG] entering Tui.runStudyTui"
                   (wantsMore, sessionCounts) <-
                     Tui.runStudyTui
                       Tui.StudyConfig
@@ -251,14 +243,12 @@ main = do
                         }
                       user summary now tz allSubjMap subjToAsg priorWrong subjects
                       refreshSummary (submitBatch asgToInfo) (submitSynonymWith t)
-                  putStrLn ("[DEBUG] Tui.runStudyTui returned, wantsMore=" <> show wantsMore <> " sessionCounts=" <> show (fmap length sessionCounts))
                   now3 <- getCurrentTime
                   -- 'Nothing' means the batch was never submitted; don't
                   -- record its misses in the leech history.
                   case sessionCounts of
                     Nothing -> pure ()
                     Just cs -> History.saveHistory (History.mergeSession now3 cs history)
-                  putStrLn "[DEBUG] History.saveHistory completed"
                   if wantsMore then runBatch else pure ()
 
             -- The actual submission work, isolated so 'submitBatch' can wrap
@@ -270,7 +260,6 @@ main = do
             -- silently with no record of where it happened.
             submitBatchCore asgToInfo ts subs = do
               outcomes <- mapConcurrentlyN maxParallelSubmits (postReview ts) subs
-              debugLog ("[DEBUG] mapConcurrentlyN returned " <> show (length outcomes) <> " outcomes")
               let details   = map (fmtSub asgToInfo) outcomes
                   succeeded = length [() | (_, Right _) <- outcomes]
                   failed    = length outcomes - succeeded
@@ -278,12 +267,10 @@ main = do
                     [ PendingReviews.PendingReview (Tui.subAssignmentId s) (Tui.subWrongMeaning s) (Tui.subWrongReading s) ts
                     | (s, Left _) <- outcomes
                     ]
-              debugLog ("[DEBUG] succeeded=" <> show succeeded <> " failed=" <> show failed <> " newlyFailed=" <> show (length newlyFailed))
               -- Some of these "failures" may actually have been recorded by
               -- WaniKani already (the response was lost after a successful
               -- POST) -- don't queue those for a retry that can only fail.
               (genuinelyFailed, droppedN) <- dropAlreadyRecorded newlyFailed
-              debugLog ("[DEBUG] after availability check: genuinelyFailed=" <> show (length genuinelyFailed) <> " droppedN=" <> show droppedN)
               let submitMsg = "Submitted " <> show succeeded
                            <> (if failed == 0
                                 then ""
@@ -298,22 +285,16 @@ main = do
               if null genuinelyFailed
                 then pure ()
                 else do
-                  path <- PendingReviews.pendingReviewsPath
-                  debugLog ("[DEBUG] about to save " <> show (length genuinelyFailed) <> " pending reviews to " <> path)
                   existingPending <- PendingReviews.loadPendingReviews
-                  debugLog ("[DEBUG] loaded " <> show (length existingPending) <> " existing pending reviews")
                   PendingReviews.savePendingReviews (PendingReviews.addPending existingPending genuinelyFailed)
-                  debugLog "[DEBUG] savePendingReviews call completed"
               pure (details, submitMsg)
 
             submitBatch asgToInfo subs = do
-              debugLog ("[DEBUG] submitBatch starting, " <> show (length subs) <> " submissions")
               ts <- getCurrentTime
               coreResult <- try (submitBatchCore asgToInfo ts subs)
                               :: IO (Either SomeException ([String], String))
               case coreResult of
-                Left e -> do
-                  debugLog ("[DEBUG] submitBatch CORE THREW: " <> shortErr e)
+                Left e ->
                   pure Tui.SubmitResult
                     { Tui.srMessage = "Submit failed unexpectedly: " <> shortErr e
                     , Tui.srHasMore = False
@@ -351,9 +332,6 @@ main = do
                      (Tui.subWrongMeaning s)
                      (Tui.subWrongReading s)
                      ts
-              case r of
-                Left e -> debugLog ("[DEBUG] postReview FAILED for assignment " <> show (Tui.subAssignmentId s) <> ": " <> shortErr e)
-                Right _ -> pure ()
               pure (s, r)
 
         runBatch
