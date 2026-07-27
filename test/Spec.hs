@@ -357,6 +357,10 @@ apiSpec = describe "Api JSON parsing" $ do
         smNoSyn :: ByteString
         smNoSyn = "{\"id\":1,\"object\":\"study_material\",\"data\":{\"subject_id\":42}}"
 
+    it "parses the record id (needed to update the record)" $
+      fmap Api.smId (decode smJson :: Maybe Api.StudyMaterial)
+        `shouldBe` Just (Api.StudyMaterialId 65231)
+
     it "parses the subject id" $
       fmap Api.smSubjectId (decode smJson :: Maybe Api.StudyMaterial)
         `shouldBe` Just (Api.SubjectId 8693)

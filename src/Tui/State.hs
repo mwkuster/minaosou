@@ -39,6 +39,12 @@ module Tui.State
   , spaceOutSameSubject
   , acceptedReadings
 
+    -- Synonyms
+  , mergeSynonym
+  , maxSynonyms
+  , maxSynonymLength
+  , applyAddedSynonyms
+
     -- Answer checking / display
   , checkAnswer
   , acceptedMeanings
@@ -132,10 +138,19 @@ data Mode
   | ConfirmSubmit
   | Submitting                 -- background submission in flight; input blocked
   | Finished
+  | SynonymEntry Text (Text, [String])
+    -- ^ Editing a meaning synonym to add to WaniKani. First field is the
+    -- editable buffer (pre-filled with the answer the user just gave); the
+    -- pair is the 'WrongAnswer' payload to restore on cancel.
+  | SynonymSubmitting (Text, [String])
+    -- ^ The synonym add is in flight; input blocked. Carries the
+    -- 'WrongAnswer' payload to restore if the submission fails.
   deriving (Show, Eq)
 
 -- | Custom Brick event injected from background threads.
-data AppEvent = SubmitDone (Either SomeException SubmitResult)
+data AppEvent
+  = SubmitDone  (Either SomeException SubmitResult)
+  | SynonymDone (Either SomeException Api.StudyMaterial)
 
 data AppState = AppState
   { stQueue        :: [Q]
@@ -150,6 +165,7 @@ data AppState = AppState
   , stMode         :: Mode
   , stBanner       :: Maybe Text
   , stError        :: Maybe Text                       -- transient error message (network etc.)
+  , stNotice       :: Maybe Text                       -- transient positive notice (e.g. "synonym added")
   , stHasMore      :: Bool
   , stWantsMore    :: Bool
   , stAudioPlayer   :: Maybe String                    -- command to play audio (e.g. "mpv --really-quiet")
@@ -385,6 +401,59 @@ initProgress s =
 acceptedReadings :: Api.Subject -> [Text]
 acceptedReadings s =
   filter (not . T.null . T.strip) (Api.subjReadings s)
+
+--------------------------------------------------------------------------------
+-- Synonyms
+--------------------------------------------------------------------------------
+
+-- | WaniKani's caps on meaning synonyms. Enforced client-side so the common
+-- mistakes are caught before any network call; WaniKani's own 422 (now
+-- decoded by 'Util.shortErr') remains the backstop if these ever drift.
+maxSynonyms :: Int
+maxSynonyms = 8
+
+maxSynonymLength :: Int
+maxSynonymLength = 64
+
+-- | Validate a candidate meaning synonym against a subject's existing
+-- synonyms and its already-accepted answers, returning either a reason to
+-- reject it or the /complete/ new synonym list to send to WaniKani (which
+-- replaces the array wholesale, so the existing entries are carried along).
+--
+--   * @existing@ -- the subject's current 'Api.subjUserSynonyms'.
+--   * @accepted@ -- everything already treated as correct (primary meanings,
+--     whitelist, existing synonyms); adding one of these is a no-op.
+mergeSynonym :: [Text] -> [Text] -> Text -> Either Text [Text]
+mergeSynonym existing accepted candidate
+  | T.null s                          = Left "Enter a synonym."
+  | T.length s > maxSynonymLength      = Left ("Too long (max " <> T.pack (show maxSynonymLength) <> " characters).")
+  | normMeaning s `elem` acceptedNorm  = Left "Already accepted for this item."
+  | length existing >= maxSynonyms     = Left ("WaniKani allows at most " <> T.pack (show maxSynonyms) <> " synonyms.")
+  | otherwise                          = Right (existing ++ [s])
+  where
+    s           = T.strip candidate
+    acceptedNorm = map normMeaning (existing ++ accepted)
+
+-- | Record synonyms WaniKani has just accepted for a subject, so the rest of
+-- this session treats them as correct: overwrite that subject's
+-- 'Api.subjUserSynonyms' (and 'Api.subjStudyMaterialId', which a freshly
+-- created record now carries) everywhere it appears -- the full-subject map
+-- and every copy sitting in the queue.
+applyAddedSynonyms :: Api.SubjectId -> [Text] -> Maybe Api.StudyMaterialId -> AppState -> AppState
+applyAddedSynonyms sid synonyms mSmId st =
+  st { stAllSubjects = M.adjust patch sid (stAllSubjects st)
+     , stQueue       = newQueue
+     , stQueueWidget = mkQueueWidget newQueue
+     }
+  where
+    newQueue = map patchQ (stQueue st)
+    patchQ q = q { qSubject = patch (qSubject q) }
+    patch s
+      | Api.subjId s == sid =
+          s { Api.subjUserSynonyms = synonyms
+            , Api.subjStudyMaterialId = mSmId
+            }
+      | otherwise = s
 
 --------------------------------------------------------------------------------
 -- Answer checking / display

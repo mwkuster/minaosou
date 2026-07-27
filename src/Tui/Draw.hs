@@ -93,6 +93,10 @@ drawMain st
                   case stError st of
                     Just msg -> [padTop (Pad 1) (withAttr (attrName "bad") (txtWrap msg))]
                     Nothing  -> []
+                noticeWidgets =
+                  case stNotice st of
+                    Just msg -> [padTop (Pad 1) (withAttr (attrName "ok") (txtWrap msg))]
+                    Nothing  -> []
                 breakdownWidgets = drawBreakdown st
                 hintLine =
                   case stMode st of
@@ -120,6 +124,7 @@ drawMain st
                 ++ detailWidgets
                 ++ bannerWidgets
                 ++ errorWidgets
+                ++ noticeWidgets
                 ++ [ padTop (Pad 1) hintLine ]
                  )
 
@@ -146,6 +151,13 @@ drawMain st
                    Just msg ->
                      [ padTop (Pad 1)
                          (withAttr (attrName "bad") (txtWrap msg))
+                     ]
+                   Nothing -> []
+               )
+            ++ ( case stNotice st of
+                   Just msg ->
+                     [ padTop (Pad 1)
+                         (withAttr (attrName "ok") (txtWrap msg))
                      ]
                    Nothing -> []
                )
@@ -195,6 +207,19 @@ drawMode st q =
 
     Feedback msg ->
       withAttr (attrName "ok") $ txt msg
+
+    SynonymEntry buf _ ->
+      vBox
+        [ withAttr (attrName "header") $
+            txt "Add meaning synonym to WaniKani:"
+        , padTop (Pad 1) $
+            withAttr (attrName "input") $
+              B.borderWithLabel (str "Synonym") $
+                padAll 1 $ txt (if T.null buf then " " else buf)
+        ]
+
+    SynonymSubmitting _ ->
+      withAttr (attrName "header") $ txt "Adding synonym…"
 
     _ -> emptyWidget
 
@@ -477,9 +502,14 @@ normalHintWidget q st =
   case stMode st of
     WrongAnswer _ _ ->
       hintBox $
-        [ "Ctrl-o=override correct", "Ctrl-r=requeue (no penalty)", "Enter=requeue (wrong)"
-        , "Ctrl-a=all info", "Ctrl-u=user", "Ctrl-v=reviews", "↑↓=scroll"
-        ] ++ [ "Ctrl-p=play audio" | hasAudio q st ]
+        [ "Ctrl-o=override correct", "Ctrl-r=requeue (no penalty)", "Enter=requeue (wrong)" ]
+        ++ [ "Ctrl-y=add synonym" | qKind q == QMeaning ]
+        ++ [ "Ctrl-a=all info", "Ctrl-u=user", "Ctrl-v=reviews", "↑↓=scroll" ]
+        ++ [ "Ctrl-p=play audio" | hasAudio q st ]
+    SynonymEntry _ _ ->
+      hintBox [ "Enter=add to WaniKani", "Esc=cancel" ]
+    SynonymSubmitting _ ->
+      hintBox [ "please wait…" ]
     _ ->
       hintBox $
         [ "Enter=submit", "Ctrl-o=override", "Ctrl-r=requeue"

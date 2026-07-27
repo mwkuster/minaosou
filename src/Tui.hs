@@ -32,8 +32,9 @@ runStudyTui
   -> [Api.Subject]
   -> IO (UTCTime, Api.Summary)
   -> ([Submission] -> IO SubmitResult)
+  -> (Api.SubjectId -> Maybe Api.StudyMaterialId -> [T.Text] -> IO Api.StudyMaterial)
   -> IO (Bool, Maybe [(Api.SubjectId, Int, Int)])
-runStudyTui cfg user summary now tz allSubjects subjToAsg priorWrong subjects refreshFn submitFn = do
+runStudyTui cfg user summary now tz allSubjects subjToAsg priorWrong subjects refreshFn submitFn submitSynonymFn = do
   let queue0 = concatMap mkQuestions subjects
       prog0  = M.fromList [ (Api.subjId s, initProgress s) | s <- subjects ]
 
@@ -53,6 +54,7 @@ runStudyTui cfg user summary now tz allSubjects subjToAsg priorWrong subjects re
         , stMode          = Normal
         , stBanner        = Nothing
         , stError         = Nothing
+        , stNotice        = Nothing
         , stHasMore       = False
         , stWantsMore     = False
         , stAudioPlayer   = scAudioPlayer cfg
@@ -74,14 +76,18 @@ runStudyTui cfg user summary now tz allSubjects subjToAsg priorWrong subjects re
 
   let buildVty = VCP.mkVty V.defaultConfig
   initialVty <- buildVty
-  finalState <- customMain initialVty buildVty (Just chan) (app refreshFn submitFn) st0
+  finalState <- customMain initialVty buildVty (Just chan) (app refreshFn submitFn submitSynonymFn) st0
   pure (stWantsMore finalState, recordableWrongCounts finalState)
 
-app :: IO (UTCTime, Api.Summary) -> ([Submission] -> IO SubmitResult) -> App AppState AppEvent Name
-app refreshFn submitFn = App
+app
+  :: IO (UTCTime, Api.Summary)
+  -> ([Submission] -> IO SubmitResult)
+  -> (Api.SubjectId -> Maybe Api.StudyMaterialId -> [T.Text] -> IO Api.StudyMaterial)
+  -> App AppState AppEvent Name
+app refreshFn submitFn submitSynonymFn = App
   { appDraw         = drawUi
   , appChooseCursor = neverShowCursor
-  , appHandleEvent  = handleEvent refreshFn submitFn
+  , appHandleEvent  = handleEvent refreshFn submitFn submitSynonymFn
   , appStartEvent   = autoplayIfNeeded
   , appAttrMap      = const theMap
   }

@@ -24,8 +24,18 @@ import qualified Data.Text as T
 import System.Process (spawnProcess)
 import System.Random (randomRIO)
 
-handleEvent :: IO (UTCTime, Api.Summary) -> ([Submission] -> IO SubmitResult) -> BrickEvent Name AppEvent -> EventM Name AppState ()
-handleEvent _ _ (AppEvent (SubmitDone result)) =
+-- | How the event layer submits a meaning synonym: the subject, its existing
+-- study-material id (if any), and the /complete/ new synonym list.
+type SynonymSubmit =
+  Api.SubjectId -> Maybe Api.StudyMaterialId -> [T.Text] -> IO Api.StudyMaterial
+
+handleEvent
+  :: IO (UTCTime, Api.Summary)
+  -> ([Submission] -> IO SubmitResult)
+  -> SynonymSubmit
+  -> BrickEvent Name AppEvent
+  -> EventM Name AppState ()
+handleEvent _ _ _ (AppEvent (SubmitDone result)) =
   modify $ \st -> case result of
     Right r -> st
       { stMode          = Finished
@@ -44,19 +54,22 @@ handleEvent _ _ (AppEvent (SubmitDone result)) =
       , stError = Just (T.pack ("submit failed: " <> shortErr e))
       , stSubmitAttempted = True
       }
-handleEvent refreshFn submitFn (VtyEvent ev) = do
+handleEvent _ _ _ (AppEvent (SynonymDone result)) = handleSynonymDone result
+handleEvent refreshFn submitFn submitSynonymFn (VtyEvent ev) = do
   st <- get
   if stOverlay st /= NoOverlay
     then handleOverlay ev
     else do
       case stMode st of
-        WrongAnswer _ _ -> handleWrongAnswer refreshFn ev
-        ConfirmSubmit   -> handleConfirm submitFn ev
-        Submitting      -> pure ()                           -- swallow all input
-        Finished        -> handleFinished refreshFn ev
-        _               -> handleNormal refreshFn ev
+        WrongAnswer _ _     -> handleWrongAnswer refreshFn ev
+        ConfirmSubmit       -> handleConfirm submitFn ev
+        Submitting          -> pure ()                       -- swallow all input
+        SynonymEntry _ _    -> handleSynonymEntry submitSynonymFn ev
+        SynonymSubmitting _ -> pure ()                       -- swallow input in flight
+        Finished            -> handleFinished refreshFn ev
+        _                   -> handleNormal refreshFn ev
       autoplayIfNeeded
-handleEvent _ _ _ = pure ()
+handleEvent _ _ _ _ = pure ()
 
 -- | Auto-play the current question's audio on its first appearance this
 -- session (config-gated). Called after every key event regardless of which
@@ -161,6 +174,20 @@ handleWrongAnswer refreshFn ev =
   case handleSharedCtrlKeys refreshFn ev of
     Just action -> action
     Nothing -> case ev of
+      -- Add a meaning synonym to WaniKani (meaning questions only -- WaniKani
+      -- has no reading synonyms). Opens an editable field pre-filled with the
+      -- answer just given; the submit itself happens in handleSynonymEntry.
+      V.EvKey (V.KChar 'y') [V.MCtrl] -> do
+        st <- get
+        case (stMode st, currentQuestion st) of
+          (WrongAnswer inp acc, Just q)
+            | qKind q == QMeaning ->
+                put st { stMode  = SynonymEntry inp (inp, acc)
+                       , stError = Nothing
+                       , stNotice = Nothing
+                       }
+          _ -> pure ()
+
       V.EvKey V.KEnter [] -> do
         st <- get
         case currentQuestion st of
@@ -174,6 +201,72 @@ handleWrongAnswer refreshFn ev =
       _ -> pure ()
   where
     resetMainScroll = vScrollToBeginning (viewportScroll MainViewport)
+
+-- | Editing a meaning synonym (see the Ctrl-y case above). Enter validates
+-- and, if valid, fires the async add and blocks input until it returns; Esc
+-- cancels back to the wrong-answer screen. A validation failure (empty, too
+-- long, duplicate, over the cap) is shown without any network call.
+handleSynonymEntry :: SynonymSubmit -> V.Event -> EventM Name AppState ()
+handleSynonymEntry submitSynonymFn ev = do
+  st <- get
+  case stMode st of
+    SynonymEntry buf payload@(inp, acc) -> case ev of
+      V.EvKey V.KEsc [] ->
+        put st { stMode = WrongAnswer inp acc, stError = Nothing }
+
+      V.EvKey V.KEnter [] ->
+        case currentQuestion st of
+          Nothing -> pure ()
+          Just q  ->
+            let subj     = qSubject q
+                existing = Api.subjUserSynonyms subj
+                accepted = acceptedMeanings subj
+            in case mergeSynonym existing accepted buf of
+                 Left reason   -> put st { stError = Just reason }
+                 Right newList -> do
+                   let chan  = stSubmitChan st
+                       sid   = Api.subjId subj
+                       mSmId = Api.subjStudyMaterialId subj
+                   put st { stMode   = SynonymSubmitting payload
+                          , stError  = Nothing
+                          , stNotice = Nothing
+                          }
+                   void $ liftIO $ forkIO $ do
+                     r <- try (submitSynonymFn sid mSmId newList)
+                     writeBChan chan (SynonymDone r)
+
+      V.EvKey k [] | k `elem` [V.KBS, V.KDel] ->
+        put st { stMode  = SynonymEntry (if T.null buf then buf else T.init buf) payload
+               , stError = Nothing
+               }
+
+      V.EvKey (V.KChar c) [] ->
+        put st { stMode = SynonymEntry (buf <> T.singleton c) payload, stError = Nothing }
+
+      _ -> pure ()
+    _ -> pure ()
+
+-- | Resolve an in-flight synonym add. On success, record the synonyms locally
+-- so the rest of the session accepts them, then count the current question
+-- correct (override) and advance. On failure, return to the wrong-answer
+-- screen with the error.
+handleSynonymDone :: Either SomeException Api.StudyMaterial -> EventM Name AppState ()
+handleSynonymDone (Right sm) = do
+  st <- get
+  let st' = applyAddedSynonyms (Api.smSubjectId sm) (Api.smMeaningSynonyms sm)
+              (Just (Api.smId sm)) st
+  case currentQuestion st' of
+    Just q  -> put ((advanceOverride q st') { stNotice = Just "✓ synonym added", stError = Nothing })
+    Nothing -> put st' { stMode = Normal, stNotice = Just "✓ synonym added", stError = Nothing }
+  vScrollToBeginning (viewportScroll MainViewport)
+handleSynonymDone (Left e) = do
+  st <- get
+  let (inp, acc) = case stMode st of
+                     SynonymSubmitting p -> p
+                     _                   -> (T.empty, [])
+  put st { stMode  = WrongAnswer inp acc
+         , stError = Just (T.pack ("synonym add failed: " <> shortErr e))
+         }
 
 handleConfirm :: ([Submission] -> IO SubmitResult) -> V.Event -> EventM Name AppState ()
 handleConfirm submitFn ev =
@@ -259,6 +352,7 @@ handleNormal refreshFn ev =
           { stInput = stInput st <> T.singleton c
           , stMode  = Normal
           , stError = Nothing
+          , stNotice = Nothing
           }
 
       _ -> pure ()

@@ -4,6 +4,7 @@
 module Api
   ( SubjectId(..)
   , AssignmentId(..)
+  , StudyMaterialId(..)
 
   , User(..)
   , UserEnvelope(..)
@@ -32,6 +33,7 @@ module Api
   , getSubjectsByIds
   , StudyMaterial(..)
   , getMeaningSynonyms
+  , putMeaningSynonyms
   , ReviewResult(..)
   , createReview
   ) where
@@ -74,14 +76,22 @@ newtype SubjectId = SubjectId { unSubjectId :: Int }
 newtype AssignmentId = AssignmentId { unAssignmentId :: Int }
   deriving (Eq, Ord)
 
-instance Show SubjectId    where show (SubjectId i)    = show i
-instance Show AssignmentId where show (AssignmentId i) = show i
+-- | WaniKani study-material ID -- the id of the record holding a subject's
+-- meaning synonyms, distinct from the subject's own id. Needed to /update/
+-- an existing record (PUT); a subject with no record yet is created (POST).
+newtype StudyMaterialId = StudyMaterialId { unStudyMaterialId :: Int }
+  deriving (Eq, Ord)
+
+instance Show SubjectId       where show (SubjectId i)       = show i
+instance Show AssignmentId    where show (AssignmentId i)    = show i
+instance Show StudyMaterialId where show (StudyMaterialId i) = show i
 
 instance ToJSON SubjectId      where toJSON (SubjectId i)        = toJSON i
 instance ToJSON AssignmentId   where toJSON (AssignmentId i)     = toJSON i
 
-instance FromJSON SubjectId    where parseJSON v = SubjectId    <$> parseJSON v
-instance FromJSON AssignmentId where parseJSON v = AssignmentId <$> parseJSON v
+instance FromJSON SubjectId       where parseJSON v = SubjectId       <$> parseJSON v
+instance FromJSON AssignmentId    where parseJSON v = AssignmentId    <$> parseJSON v
+instance FromJSON StudyMaterialId where parseJSON v = StudyMaterialId <$> parseJSON v
 
 --------------------------------------------------------------------------------
 -- Shared API options
@@ -478,6 +488,11 @@ data Subject = Subject
     -- subject endpoint's payload -- filled in from @study_materials@ (see
     -- 'getMeaningSynonyms') after the subject is fetched, and empty until
     -- then.
+  , subjStudyMaterialId  :: Maybe StudyMaterialId
+    -- ^ The id of this subject's @study_materials@ record, if one exists.
+    -- Also filled in from @study_materials@ after fetching. Needed to update
+    -- (PUT) the record when adding a synonym; 'Nothing' means the record must
+    -- be created (POST) first. See 'putMeaningSynonyms'.
   , subjReadings         :: [Text]       -- accepted readings (kana/romaji depending on type)
   , subjAudioUrls        :: [Text]       -- pronunciation audio URLs (vocab only)
   , subjMeaningMnemonic  :: Maybe Text
@@ -547,6 +562,7 @@ instance FromJSON Subject where
       , subjAuxWhitelist    = auxOfType "whitelist"
       , subjAuxBlacklist    = auxOfType "blacklist"
       , subjUserSynonyms    = []
+      , subjStudyMaterialId = Nothing
       , subjReadings        = readings
       , subjAudioUrls       = audioUrls
       , subjMeaningMnemonic = mmnem
@@ -594,7 +610,8 @@ getSubjectsByIds token = fetchBySubjectIdsChunked token (https "api.wanikani.com
 -- answers the user deliberately told WaniKani to accept, so kroki must
 -- accept them too.
 data StudyMaterial = StudyMaterial
-  { smSubjectId       :: SubjectId
+  { smId              :: StudyMaterialId
+  , smSubjectId       :: SubjectId
   , smMeaningSynonyms :: [Text]
   } deriving (Show, Eq)
 
@@ -602,13 +619,17 @@ instance FromJSON StudyMaterial where
   parseJSON = withObject "StudyMaterial" $ \o -> do
     d <- o .: "data"
     StudyMaterial
-      <$> d .:  "subject_id"
+      <$> o .:  "id"
+      <*> d .:  "subject_id"
       <*> d .:? "meaning_synonyms" .!= []
 
--- | Every subject the user has defined meaning synonyms for. One call per
--- session; the collection is small (one record per subject the user has
--- ever annotated) but is paginated like every other WaniKani collection.
-getMeaningSynonyms :: String -> IO (M.Map SubjectId [Text])
+-- | Every study-material record the user has, keyed by subject. One call per
+-- session; the collection is small (one record per subject the user has ever
+-- annotated) but is paginated like every other WaniKani collection. Records
+-- are kept even with no synonyms yet -- their id is still needed to update
+-- (rather than re-create) the record when a synonym is later added. There is
+-- at most one record per subject, so the keys never collide.
+getMeaningSynonyms :: String -> IO (M.Map SubjectId StudyMaterial)
 getMeaningSynonyms token = do
   firstPage <- runApi $ do
     resp <- req
@@ -619,11 +640,30 @@ getMeaningSynonyms token = do
       (apiOpts token)
     pure (responseBody resp :: PagedEnvelope StudyMaterial)
   materials <- collectPages token maxBound firstPage
-  pure $ M.fromListWith (<>)
-    [ (smSubjectId sm, smMeaningSynonyms sm)
-    | sm <- materials
-    , not (null (smMeaningSynonyms sm))
-    ]
+  pure $ M.fromList [ (smSubjectId sm, sm) | sm <- materials ]
+
+-- | Set a subject's meaning synonyms to @synonyms@ (the /complete/ new list --
+-- WaniKani replaces the array, it does not append). Updates the existing
+-- record when a 'StudyMaterialId' is given (PUT), otherwise creates one
+-- (POST). Returns the record as WaniKani stored it, so the caller can read
+-- back the canonical synonyms and the id of a freshly-created record.
+putMeaningSynonyms :: String -> Maybe StudyMaterialId -> SubjectId -> [Text] -> IO StudyMaterial
+putMeaningSynonyms token mSmId subjId synonyms = runApi $ do
+  let endpoint = https "api.wanikani.com" /: "v2" /: "study_materials"
+  resp <- case mSmId of
+    Just smId' ->
+      let body = object [ "study_material" .= object [ "meaning_synonyms" .= synonyms ] ]
+      in req PUT (endpoint /: T.pack (show (unStudyMaterialId smId')))
+             (ReqBodyJson body) jsonResponse (apiOpts token)
+    Nothing ->
+      let body = object
+            [ "study_material" .= object
+                [ "subject_id"       .= unSubjectId subjId
+                , "meaning_synonyms" .= synonyms
+                ]
+            ]
+      in req POST endpoint (ReqBodyJson body) jsonResponse (apiOpts token)
+  pure (responseBody resp :: StudyMaterial)
 
 -- | Fetch a resource keyed by subject id, chunked into groups of 100 to
 -- avoid overlong URLs. Shared by 'getSubjectsByIds' and

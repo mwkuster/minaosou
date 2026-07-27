@@ -87,7 +87,7 @@ main = do
                   now <- getCurrentTime
                   tz  <- getCurrentTimeZone
 
-                  leechSubjects <- applyUserSynonyms userSynonyms
+                  leechSubjects <- applyStudyMaterials userSynonyms
                                      <$> Api.getSubjectsByIds t batchIds
                   allSubjMap <- fetchSubjectContext t userSynonyms leechSubjects
                   asgs <- Api.getAssignmentsBySubjectIds t batchIds
@@ -118,7 +118,7 @@ main = do
                         , Tui.scPracticeOnly  = True
                         }
                       user summary0 now tz allSubjMap subjToAsg priorWrong leechSubjects
-                      refreshSummary submitPractice
+                      refreshSummary submitPractice (submitSynonymWith t)
                   now2 <- getCurrentTime
                   -- 'Nothing' means the practice round was abandoned before
                   -- finishing; leave the leech history untouched rather than
@@ -225,7 +225,7 @@ main = do
                 else do
                   let subjectIds = map Api.asSubjectId as
                       subjToAsg  = M.fromList [ (Api.asSubjectId a, a) | a <- as ]
-                  subjects <- applyUserSynonyms userSynonyms
+                  subjects <- applyStudyMaterials userSynonyms
                                 <$> Api.getSubjectsByIds t subjectIds
                   allSubjMap <- fetchSubjectContext t userSynonyms subjects
                   let asgToInfo  = M.fromList
@@ -250,7 +250,7 @@ main = do
                         , Tui.scPracticeOnly  = False
                         }
                       user summary now tz allSubjMap subjToAsg priorWrong subjects
-                      refreshSummary (submitBatch asgToInfo)
+                      refreshSummary (submitBatch asgToInfo) (submitSynonymWith t)
                   putStrLn ("[DEBUG] Tui.runStudyTui returned, wantsMore=" <> show wantsMore <> " sessionCounts=" <> show (fmap length sessionCounts))
                   now3 <- getCurrentTime
                   -- 'Nothing' means the batch was never submitted; don't
@@ -403,12 +403,24 @@ main = do
 
     Cli.Study studyOpts -> runStudy studyOpts
 
--- | Attach the user's own WaniKani meaning synonyms to each subject, so
--- 'Tui.acceptedMeanings' treats them as correct answers -- the user added
--- them precisely so WaniKani would accept them.
-applyUserSynonyms :: M.Map Api.SubjectId [T.Text] -> [Api.Subject] -> [Api.Subject]
-applyUserSynonyms syns =
-  map (\s -> s { Api.subjUserSynonyms = M.findWithDefault [] (Api.subjId s) syns })
+-- | Attach the user's own WaniKani study-material data (meaning synonyms and
+-- the record id) to each subject, so 'Tui.acceptedMeanings' treats the
+-- synonyms as correct answers -- the user added them precisely so WaniKani
+-- would accept them -- and 'Api.putMeaningSynonyms' can update the right
+-- record when a new synonym is added.
+applyStudyMaterials :: M.Map Api.SubjectId Api.StudyMaterial -> [Api.Subject] -> [Api.Subject]
+applyStudyMaterials sms = map patch
+  where
+    patch s = case M.lookup (Api.subjId s) sms of
+      Just sm -> s { Api.subjUserSynonyms    = Api.smMeaningSynonyms sm
+                   , Api.subjStudyMaterialId = Just (Api.smId sm)
+                   }
+      Nothing -> s
+
+-- | The synonym-submission callback threaded into 'Tui.runStudyTui': add a
+-- meaning synonym to WaniKani for a subject (create or update as needed).
+submitSynonymWith :: String -> Api.SubjectId -> Maybe Api.StudyMaterialId -> [T.Text] -> IO Api.StudyMaterial
+submitSynonymWith t sid mSmId synonyms = Api.putMeaningSynonyms t mSmId sid synonyms
 
 -- | Fetch the extra subjects referenced by a batch of subjects being
 -- studied -- component kanji/radicals, vocabulary that uses a kanji, and
@@ -416,24 +428,24 @@ applyUserSynonyms syns =
 -- itself and everything referenced from it. Used to render the Ctrl-a
 -- overlay and wrong-answer hints; shared by a normal study batch and a
 -- leech practice round, which need identical reference data.
-fetchSubjectContext :: String -> M.Map Api.SubjectId [T.Text] -> [Api.Subject] -> IO (M.Map Api.SubjectId Api.Subject)
-fetchSubjectContext t syns subjects = do
+fetchSubjectContext :: String -> M.Map Api.SubjectId Api.StudyMaterial -> [Api.Subject] -> IO (M.Map Api.SubjectId Api.Subject)
+fetchSubjectContext t sms subjects = do
   let compIds = nub [ cid | s <- subjects, cid <- Api.subjComponentIds s ]
-  compSubjects <- applyUserSynonyms syns <$> Api.getSubjectsByIds t compIds
+  compSubjects <- applyStudyMaterials sms <$> Api.getSubjectsByIds t compIds
   let amalgIds = nub
         [ aid
         | s <- subjects
         , Api.subjType s == Api.Kanji
         , aid <- Api.subjAmalgamationIds s
         ]
-  amalgSubjects <- applyUserSynonyms syns <$> Api.getSubjectsByIds t amalgIds
+  amalgSubjects <- applyStudyMaterials sms <$> Api.getSubjectsByIds t amalgIds
   let simIds = nub
         [ vid
         | s <- subjects
         , Api.subjType s == Api.Kanji
         , vid <- Api.subjVisuallySimilarIds s
         ]
-  simSubjects <- applyUserSynonyms syns <$> Api.getSubjectsByIds t simIds
+  simSubjects <- applyStudyMaterials sms <$> Api.getSubjectsByIds t simIds
   pure $ M.fromList
     [ (Api.subjId s, s)
     | s <- subjects ++ compSubjects ++ amalgSubjects ++ simSubjects

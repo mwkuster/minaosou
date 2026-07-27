@@ -5,6 +5,7 @@ module TuiSpec (spec) where
 import Test.Hspec
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import qualified Data.Text as T
 import qualified Data.Vector as Vec
 import qualified Brick.Widgets.List as L
 import Data.Time (UTCTime(..), fromGregorian, secondsToDiffTime)
@@ -41,6 +42,7 @@ kanjiSubj = Api.Subject
   , Api.subjAuxWhitelist = []
   , Api.subjAuxBlacklist = []
   , Api.subjUserSynonyms = []
+  , Api.subjStudyMaterialId = Nothing
   }
 
 -- Radical (no reading question)
@@ -61,6 +63,7 @@ radicalSubj = Api.Subject
   , Api.subjAuxWhitelist = []
   , Api.subjAuxBlacklist = []
   , Api.subjUserSynonyms = []
+  , Api.subjStudyMaterialId = Nothing
   }
 
 -- Vocab subject
@@ -81,6 +84,7 @@ vocabSubj = Api.Subject
   , Api.subjAuxWhitelist = []
   , Api.subjAuxBlacklist = []
   , Api.subjUserSynonyms = []
+  , Api.subjStudyMaterialId = Nothing
   }
 
 mkQ :: Api.Subject -> Tui.QKind -> Tui.Q
@@ -101,6 +105,7 @@ stateWith prog subjToAsg = Tui.AppState
   , Tui.stMode         = Tui.Normal
   , Tui.stBanner       = Nothing
   , Tui.stError        = Nothing
+  , Tui.stNotice       = Nothing
   , Tui.stHasMore      = False
   , Tui.stWantsMore    = False
   , Tui.stAudioPlayer   = Nothing
@@ -203,6 +208,30 @@ spec = do
       Tui.recordableWrongCounts
         (stateWith (M.fromList [ (sid 1, Tui.Progress True True True 0 0) ]) M.empty)
           { Tui.stSubmitAttempted = True } `shouldBe` Just []
+
+  -- Validation for adding a meaning synonym: catch the common mistakes
+  -- client-side before any network call, and return the complete new list
+  -- WaniKani should store (it replaces the array wholesale).
+  describe "mergeSynonym" $ do
+    it "appends a new synonym to the existing list" $
+      Tui.mergeSynonym ["evade"] ["sun", "day", "evade"] "flee"
+        `shouldBe` Right ["evade", "flee"]
+    it "trims surrounding whitespace" $
+      Tui.mergeSynonym [] [] "  flee  " `shouldBe` Right ["flee"]
+    it "rejects an empty synonym" $
+      Tui.mergeSynonym [] [] "   " `shouldBe` Left "Enter a synonym."
+    it "rejects a too-long synonym" $
+      Tui.mergeSynonym [] [] (T.replicate (Tui.maxSynonymLength + 1) "x")
+        `shouldBe` Left "Too long (max 64 characters)."
+    it "rejects a duplicate existing synonym (case-insensitive)" $
+      Tui.mergeSynonym ["Flee"] ["Flee"] "flee"
+        `shouldBe` Left "Already accepted for this item."
+    it "rejects a duplicate of an already-accepted meaning" $
+      Tui.mergeSynonym [] ["Sun"] "sun"
+        `shouldBe` Left "Already accepted for this item."
+    it "rejects adding beyond the synonym cap" $
+      Tui.mergeSynonym (map (T.pack . show) [1 .. Tui.maxSynonyms]) [] "extra"
+        `shouldBe` Left "WaniKani allows at most 8 synonyms."
 
   describe "checkAnswer" $ do
 
