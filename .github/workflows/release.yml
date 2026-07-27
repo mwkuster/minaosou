@@ -13,7 +13,7 @@ jobs:
     container:
       image: alpine:3.19
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install build dependencies
         run: |
@@ -26,7 +26,7 @@ jobs:
             git
 
       - name: Cache Cabal store
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cabal
           key: linux-static-cabal-${{ hashFiles('kroki.cabal') }}
@@ -47,7 +47,7 @@ jobs:
           strip kroki-linux-x86_64
 
       - name: Upload to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: kroki-linux-x86_64
 
@@ -57,7 +57,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up GHC
         uses: haskell-actions/setup@v2
@@ -66,7 +66,7 @@ jobs:
           cabal-version: 'latest'
 
       - name: Cache Cabal store
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cabal
           key: macos-arm64-cabal-${{ hashFiles('kroki.cabal') }}
@@ -84,6 +84,6 @@ jobs:
           strip kroki-macos-arm64
 
       - name: Upload to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: kroki-macos-arm64
