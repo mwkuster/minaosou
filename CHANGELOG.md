@@ -1,5 +1,28 @@
 # Revision history for kroki
 
+## 0.9.7 -- 2026-07-27
+
+### Answer acceptance
+* kroki now accepts every meaning WaniKani accepts: whitelisted auxiliary meanings and your own study-material synonyms are recognised. Previously a legitimate answer could be marked wrong, requeued, and even submitted to WaniKani as incorrect
+* Add a meaning synonym to WaniKani directly from a wrong-answer screen — `Ctrl-y` on a meaning question opens an editable field; on success the synonym is accepted for the rest of the session and the item counts correct
+* Romaji input: `nn` now commits a single ん (matching WaniKani/wanakana), so `zennin` and `zen'in` both give ぜんいん; write ん before a な-row syllable as `on'na`/`onnna`
+* More British/American spelling normalisation (e.g. `neighbourhood`)
+
+### Leech tracking
+* Cross-session leech tracking: items you miss are remembered across sessions and surfaced in the all-info overlay (`Ctrl-a`) as "Missed before"
+* New `kroki leeches` command lists tracked leeches worst-first; `kroki leeches --study` drills them without submitting to WaniKani. Missing a leech in practice raises its score; a clean round retires it; a relapse in a real review is weighted higher
+
+### Learning aids
+* Wrong-answer screen auto-surfaces the relevant mnemonic, flags visually-similar-kanji mix-ups by name, and shows component breakdowns (component kanji readings/meanings for vocabulary, radicals for kanji)
+* Optional auto-play of reading audio on a vocab reading question's first appearance (opt-in `audio_autoplay`)
+* End-of-session breakdown by SRS stage and subject type; rebalanced TUI colours/contrast
+
+### Reliability
+* Failed review submissions are retried automatically with backoff and, if still unsent, persisted and resubmitted on the next run instead of being lost; already-recorded reviews are not retried
+* API calls are rate-limited to stay within WaniKani's request budget on large batches
+* Error messages now report the actual HTTP status / network cause instead of a generic string
+* `kroki init` no longer fails when a config already exists, and the config file (which holds your API token) is written with owner-only permissions
+
 ## 0.9.6 -- 2026-05-17
 
 * All-info overlay (Ctrl-a): kanji subjects now list visually similar kanji, with their readings and meanings
