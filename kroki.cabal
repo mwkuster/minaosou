@@ -7,8 +7,8 @@ cabal-version:      3.0
 -- the first thing in the cabal file.
 
 name:               kroki
-version:            0.9.8.0
-synopsis:           Minimal WaniKani review client for the terminal
+version:            0.9.9.0
+synopsis:           WaniKani review client for the terminal
 description:
   A CLI/TUI application for doing WaniKani kanji and vocabulary reviews
   without leaving the terminal. Features include live romaji→hiragana

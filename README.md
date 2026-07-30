@@ -1,6 +1,6 @@
 # kroki
 
-A minimal terminal client for [WaniKani](https://www.wanikani.com/) — do your kanji and vocabulary reviews without leaving the command line.
+A terminal client for [WaniKani](https://www.wanikani.com/) — do your kanji and vocabulary SRS reviews without leaving the command line.
 
 ```
 ┌── Queue ─────────────────────┐ ┌── Current · Apprentice ──────────────────────────────────────────┐
@@ -34,6 +34,18 @@ A minimal terminal client for [WaniKani](https://www.wanikani.com/) — do your 
 - Resilient submission: transient network failures (timeouts, dropped connections, 429/5xx) are retried automatically with backoff; a review that still fails to reach WaniKani is saved locally and retried automatically the next time you run `kroki`, without asking you to answer it again
 
 ## Installation
+
+### Pre-built binaries
+
+Download the binary for your platform from the [latest release](https://github.com/mwkuster/kroki/releases/latest), then put it on your `PATH`:
+
+```bash
+# Linux (static x86-64) or macOS (arm64)
+chmod +x kroki-linux-x86_64          # or kroki-macos-arm64
+mv kroki-linux-x86_64 ~/.local/bin/kroki
+```
+
+### Build from source
 
 Requires GHC and Cabal (tested with GHC 9.6, Cabal 3.x).
 

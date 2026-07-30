@@ -1,5 +1,10 @@
 # Revision history for kroki
 
+## 0.9.9 -- 2026-07-30
+
+* The release pipeline now also builds a Windows (x86-64) binary, alongside Linux (static, x86-64) and macOS (arm64); the README points at the pre-built binaries on the releases page.
+* Reworded the project description: "a WaniKani review client" (previously "minimal").
+
 ## 0.9.8 -- 2026-07-30
 
 Two bug fixes.
