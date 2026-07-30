@@ -1,4 +1,4 @@
-# kroki
+# minaosou
 
 A terminal client for [WaniKani](https://www.wanikani.com/) — do your kanji and vocabulary SRS reviews without leaving the command line.
 
@@ -29,36 +29,36 @@ A terminal client for [WaniKani](https://www.wanikani.com/) — do your kanji an
 - Configurable batch size (0 = all available reviews)
 - Wrong-answer screen auto-surfaces the relevant mnemonic, flags visually-similar-kanji mix-ups by name, and shows the components that build the answer — component kanji and their meanings/readings for vocabulary, component radicals and their meanings for kanji; scrollable if it doesn't fit
 - End-of-session accuracy breakdown by subject type and SRS stage
-- Cross-session leech tracking (`kroki leeches`): lists subjects you keep getting wrong across sessions, and `kroki leeches --study` lets you drill them in a dedicated practice session that is never submitted to WaniKani
+- Cross-session leech tracking (`minaosou leeches`): lists subjects you keep getting wrong across sessions, and `minaosou leeches --study` lets you drill them in a dedicated practice session that is never submitted to WaniKani
 - Colour scheme puts visual focus on the current answer rather than the queue: unselected queue items are dimmed, and the answer input is rendered at full brightness
-- Resilient submission: transient network failures (timeouts, dropped connections, 429/5xx) are retried automatically with backoff; a review that still fails to reach WaniKani is saved locally and retried automatically the next time you run `kroki`, without asking you to answer it again
+- Resilient submission: transient network failures (timeouts, dropped connections, 429/5xx) are retried automatically with backoff; a review that still fails to reach WaniKani is saved locally and retried automatically the next time you run `minaosou`, without asking you to answer it again
 
 ## Installation
 
 ### Pre-built binaries
 
-Download the binary for your platform from the [latest release](https://github.com/mwkuster/kroki/releases/latest):
+Download the binary for your platform from the [latest release](https://github.com/mwkuster/minaosou/releases/latest):
 
-- `kroki-linux-x86_64` — Linux (static, x86-64)
-- `kroki-macos-arm64` — macOS (Apple Silicon)
-- `kroki-windows-x86_64.exe` — Windows (x86-64)
+- `minaosou-linux-x86_64` — Linux (static, x86-64)
+- `minaosou-macos-arm64` — macOS (Apple Silicon)
+- `minaosou-windows-x86_64.exe` — Windows (x86-64)
 
 On Linux/macOS, make it executable and put it on your `PATH`:
 
 ```bash
-chmod +x kroki-linux-x86_64          # or kroki-macos-arm64
-mv kroki-linux-x86_64 ~/.local/bin/kroki
+chmod +x minaosou-linux-x86_64          # or minaosou-macos-arm64
+mv minaosou-linux-x86_64 ~/.local/bin/minaosou
 ```
 
-On Windows, place `kroki-windows-x86_64.exe` somewhere on your `PATH`. Use a modern terminal (Windows Terminal) for correct Japanese/wide-character rendering — the legacy console renders kanji poorly.
+On Windows, place `minaosou-windows-x86_64.exe` somewhere on your `PATH`. Use a modern terminal (Windows Terminal) for correct Japanese/wide-character rendering — the legacy console renders kanji poorly.
 
 ### Build from source
 
 Requires GHC and Cabal (tested with GHC 9.6, Cabal 3.x).
 
 ```bash
-git clone https://github.com/mwkuster/kroki
-cd kroki
+git clone https://github.com/mwkuster/minaosou
+cd minaosou
 cabal build
 cabal install
 ```
@@ -66,15 +66,25 @@ cabal install
 Or run directly without installing:
 
 ```bash
-cabal run kroki -- [command]
+cabal run minaosou -- [command]
 ```
+
+### Migrating from kroki
+
+This tool was previously called `kroki`. If you have an existing install, move your config and data to the new location:
+
+```bash
+mv ~/.config/kroki ~/.config/minaosou
+```
+
+That directory holds your `config`, `leeches.json`, and `pending_reviews.json`. The command is now `minaosou` instead of `kroki`.
 
 ## Configuration
 
-Run the interactive setup wizard once to create `~/.config/kroki/config`:
+Run the interactive setup wizard once to create `~/.config/minaosou/config`:
 
 ```bash
-kroki init
+minaosou init
 ```
 
 Or write the file manually:
@@ -90,7 +100,7 @@ audio_autoplay=false
 | Key | Default | Description |
 |---|---|---|
 | `token` | — | WaniKani API token (required) |
-| `batch_size` | 10 | Reviews per session; `0` = all available. Also applies to `kroki leeches --study` |
+| `batch_size` | 10 | Reviews per session; `0` = all available. Also applies to `minaosou leeches --study` |
 | `requeue_after` | 7 | Positions later to requeue a missed item |
 | `audio_player` | — | Command to play audio; URL appended as last argument |
 | `audio_autoplay` | false | Auto-play a vocabulary reading's audio the first time it comes up each session |
@@ -100,20 +110,20 @@ The token can also be supplied via the `WANIKANI_API_TOKEN` environment variable
 ## Usage
 
 ```
-kroki                        # start a review session (default)
-kroki study --batch-size 20  # session with a custom batch size
-kroki whoami                 # show account info
-kroki reviews                # show review schedule for the next 24 h
-kroki leeches                # list subjects tracked as leeches (repeated wrong answers)
-kroki leeches --study        # practice all tracked leeches; never submitted to WaniKani
-kroki init                   # (re)create config file interactively
+minaosou                        # start a review session (default)
+minaosou study --batch-size 20  # session with a custom batch size
+minaosou whoami                 # show account info
+minaosou reviews                # show review schedule for the next 24 h
+minaosou leeches                # list subjects tracked as leeches (repeated wrong answers)
+minaosou leeches --study        # practice all tracked leeches; never submitted to WaniKani
+minaosou init                   # (re)create config file interactively
 ```
 
 ### Leech tracking
 
-Every wrong answer is recorded locally in `~/.config/kroki/leeches.json`, since WaniKani's own SRS stage can't tell "just leveled up" from "keeps regressing across sessions." `kroki leeches` lists tracked subjects sorted by how often they've been missed.
+Every wrong answer is recorded locally in `~/.config/minaosou/leeches.json`, since WaniKani's own SRS stage can't tell "just leveled up" from "keeps regressing across sessions." `minaosou leeches` lists tracked subjects sorted by how often they've been missed.
 
-`kroki leeches --study` starts a normal-looking review session built from that list instead of WaniKani's "available reviews" — worst leeches first, batched by `batch_size` — but it never calls WaniKani's review API. Instead, each practice round replaces a leech's tracked counts: answer it cleanly and it's retired — no longer shown in `kroki leeches` or drilled by `--study` — while missing it again resets its count to just that round's mistakes rather than piling on older history.
+`minaosou leeches --study` starts a normal-looking review session built from that list instead of WaniKani's "available reviews" — worst leeches first, batched by `batch_size` — but it never calls WaniKani's review API. Instead, each practice round replaces a leech's tracked counts: answer it cleanly and it's retired — no longer shown in `minaosou leeches` or drilled by `--study` — while missing it again resets its count to just that round's mistakes rather than piling on older history.
 
 Retiring a leech doesn't erase its record, though: if it ever comes up wrong again in a *real* WaniKani review, it's immediately un-retired and weighted higher than a fresh leech with the same miss count, so a relapsed item gets prioritized for practice sooner than one you're missing for the first time.
 
@@ -121,7 +131,7 @@ Retiring a leech doesn't erase its record, though: if it ever comes up wrong aga
 
 Every WaniKani API call retries automatically on transient failures — connection drops, timeouts, HTTP 429/5xx — with exponential backoff (up to 4 retries, capped at 8s per attempt). It never retries on a 4xx like an expired token, since that can't be fixed by trying again.
 
-If a review submission still fails after those retries (e.g. a longer outage), it's saved to `~/.config/kroki/pending_reviews.json` instead of being dropped. The next time you run `kroki study`, pending reviews are resubmitted first, using their original answer time; anything still stuck stays pending for the run after that. Since the assignment is still "available" on WaniKani until its review actually lands, a pending item is also excluded from that session's fresh batch, so you're never asked to re-answer something you already answered.
+If a review submission still fails after those retries (e.g. a longer outage), it's saved to `~/.config/minaosou/pending_reviews.json` instead of being dropped. The next time you run `minaosou study`, pending reviews are resubmitted first, using their original answer time; anything still stuck stays pending for the run after that. Since the assignment is still "available" on WaniKani until its review actually lands, a pending item is also excluded from that session's fresh batch, so you're never asked to re-answer something you already answered.
 
 ## TUI keybindings
 

@@ -682,7 +682,7 @@ withTempDir :: (FilePath -> IO a) -> IO a
 withTempDir act = do
   base  <- getTemporaryDirectory
   stamp <- (filter isDigit . show) <$> getCurrentTime
-  let dir = base </> ("kroki-test-" <> stamp)
+  let dir = base </> ("minaosou-test-" <> stamp)
   bracket
     (createDirectoryIfMissing True dir >> pure dir)
     removeDirectoryRecursive

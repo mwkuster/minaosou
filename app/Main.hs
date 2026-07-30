@@ -37,7 +37,7 @@ main = do
 
   let requireToken =
         maybe
-          (die "Missing API token. Provide --token, set WANIKANI_API_TOKEN, or put token=... into ~/.config/kroki/config")
+          (die "Missing API token. Provide --token, set WANIKANI_API_TOKEN, or put token=... into ~/.config/minaosou/config")
           pure
           token
 

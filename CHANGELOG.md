@@ -1,4 +1,12 @@
-# Revision history for kroki
+# Revision history for minaosou
+
+## 1.0.0 -- 2026-07-30
+
+* **Renamed: `kroki` → `minaosou`.** The command, package, repository, and config directory are all now `minaosou` (見直そう, "let's review"). The old name collided with the well-known [kroki.io](https://kroki.io) diagram tool; this is otherwise the same application.
+  * **Migrating from kroki:** move your config and data with `mv ~/.config/kroki ~/.config/minaosou` (it holds `config`, `leeches.json`, and `pending_reviews.json`). The command is now `minaosou` instead of `kroki`.
+* First release under the new name; no functional changes from 0.9.9.
+
+_Entries below were released under the old name, `kroki`._
 
 ## 0.9.9 -- 2026-07-30
 

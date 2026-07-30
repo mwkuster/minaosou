@@ -31,7 +31,7 @@ data LeechEntry = LeechEntry
   , leLastSeen     :: UTCTime
   , leRetired      :: Bool
     -- ^ Graduated out of active leech status via a clean
-    -- @kroki leeches --study@ round. Excluded from the leech list and from
+    -- @minaosou leeches --study@ round. Excluded from the leech list and from
     -- future practice queues, but the record is kept (not deleted) so a
     -- relapse can still be recognised.
   , leRelapses     :: Int
@@ -111,7 +111,7 @@ mergeSession now sessionCounts existing = foldl' step existing sessionCounts
           , leLastSeen     = leLastSeen new
           }
 
--- | After a leech-only practice session ("kroki leeches --study"), update
+-- | After a leech-only practice session ("minaosou leeches --study"), update
 -- each practiced subject's entry:
 --
 --   * answered fully correctly this round -> it "graduated": retire it
@@ -162,6 +162,6 @@ leechWeight e = leWrongMeaning e + leWrongReading e + relapseBonus * leRelapses 
   where relapseBonus = 3
 
 -- | Entries not yet retired -- i.e. still due to be surfaced in
--- @kroki leeches@ and practiced by @kroki leeches --study@.
+-- @minaosou leeches@ and practiced by @minaosou leeches --study@.
 activeLeeches :: M.Map Api.SubjectId LeechEntry -> M.Map Api.SubjectId LeechEntry
 activeLeeches = M.filter (not . leRetired)

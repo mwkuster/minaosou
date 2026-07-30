@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Config
-  ( KrokiConfig(..)
+  ( MinaosouConfig(..)
   , loadConfig
   , parseConfig
   , initConfig
@@ -36,7 +36,7 @@ defaultBatchSize = 10
 defaultRequeueAfter :: Int
 defaultRequeueAfter = 7
 
-data KrokiConfig = KrokiConfig
+data MinaosouConfig = MinaosouConfig
   { cfgToken :: Maybe String
   , cfgBatchSize :: Maybe Int
   , cfgRequeueAfter :: Maybe Int
@@ -44,25 +44,25 @@ data KrokiConfig = KrokiConfig
   , cfgAudioAutoplay :: Maybe Bool
   } deriving (Show, Eq)
 
--- Loads ~/.config/kroki/config (via XDG)
+-- Loads ~/.config/minaosou/config (via XDG)
 --
 -- The read is strict ('readFile''). With lazy 'readFile' the handle stays
 -- open until the parsed values are forced, and 'lookupKey' stops at the
 -- first match rather than consuming to EOF -- so the handle was still open
 -- (and the file still locked) when 'writeConfigInteractive' tried to write
--- the same path, making @kroki init@ fail outright with
+-- the same path, making @minaosou init@ fail outright with
 -- @withFile: resource busy (file is locked)@ whenever a config already
 -- existed.
-loadConfig :: IO KrokiConfig
+loadConfig :: IO MinaosouConfig
 loadConfig = do
-  base <- getXdgDirectory XdgConfig "kroki"
+  base <- getXdgDirectory XdgConfig "minaosou"
   let path = base </> "config"
   content <- readFile' path `catch` \(_ :: IOException) -> pure ""
   pure $ parseConfig content
 
-parseConfig :: String -> KrokiConfig
+parseConfig :: String -> MinaosouConfig
 parseConfig s =
-  KrokiConfig
+  MinaosouConfig
     { cfgToken        = lookupKey "token"        ls
     , cfgBatchSize    = lookupInt "batch_size"   ls
     , cfgRequeueAfter = lookupInt "requeue_after" ls
@@ -88,11 +88,11 @@ lookupKey key ls =
 trim :: String -> String
 trim = dropWhile isSpace . reverse . dropWhile isSpace . reverse
 
--- | Interactively create (or overwrite) ~/.config/kroki/config.
+-- | Interactively create (or overwrite) ~/.config/minaosou/config.
 -- Prompts for each value; pressing Enter accepts the shown default.
 initConfig :: IO ()
 initConfig = do
-  base <- getXdgDirectory XdgConfig "kroki"
+  base <- getXdgDirectory XdgConfig "minaosou"
   let path = base </> "config"
 
   existing   <- loadConfig
@@ -111,7 +111,7 @@ initConfig = do
       putStrLn ("Creating config at: " <> path)
       writeConfigInteractive base path existing
 
-writeConfigInteractive :: FilePath -> FilePath -> KrokiConfig -> IO ()
+writeConfigInteractive :: FilePath -> FilePath -> MinaosouConfig -> IO ()
 writeConfigInteractive dir path existing = do
   token      <- promptToken (cfgToken existing)
   batchSize  <- prompt "Batch size (0 = all available)" (Just (maybe (show defaultBatchSize)  show (cfgBatchSize existing)))

@@ -1,6 +1,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
--- | Shared persistence for kroki's small JSON state files in the XDG config
+-- | Shared persistence for minaosou's small JSON state files in the XDG config
 -- directory (@leeches.json@, @pending_reviews.json@). Both follow the same
 -- rules: never crash a study session over local state, and never lose state
 -- that was already on disk.
@@ -22,10 +22,10 @@ import System.Directory
   )
 import System.FilePath ((</>), takeDirectory)
 
--- | Path to a state file in kroki's XDG config directory.
+-- | Path to a state file in minaosou's XDG config directory.
 configFilePath :: FilePath -> IO FilePath
 configFilePath name = do
-  base <- getXdgDirectory XdgConfig "kroki"
+  base <- getXdgDirectory XdgConfig "minaosou"
   pure (base </> name)
 
 -- | Read and decode a JSON state file, soft-failing to @fallback@ on a

@@ -168,7 +168,7 @@ admitRequest budget now sent
     oldest   = last inWindow
 
 -- | Timestamps of recent API requests, newest first. A process-wide global
--- because the limit is per WaniKani account and kroki talks to exactly one,
+-- because the limit is per WaniKani account and minaosou talks to exactly one,
 -- from any number of concurrent submission threads.
 {-# NOINLINE sentRequests #-}
 sentRequests :: MVar [UTCTime]
@@ -424,7 +424,7 @@ fetchPage token url = do
     Just (Right (u, opts)) -> runApi $ do
       resp <- req GET u NoReqBody jsonResponse (opts <> apiOpts token)
       pure (responseBody resp)
-    _ -> fail ("kroki: unexpected next_url, not an https URL: " <> T.unpack url)
+    _ -> fail ("minaosou: unexpected next_url, not an https URL: " <> T.unpack url)
 
 -- | Fetch assignments for specific subjects (regardless of review
 -- availability) -- used to show the current SRS stage for a fixed set of
@@ -478,7 +478,7 @@ data Subject = Subject
     -- ^ Extra meanings WaniKani accepts in its own reviews
     -- (@auxiliary_meanings@ of type @whitelist@) but does not display as the
     -- canonical answer, e.g. "Evade" for 避 (Dodge/Avoid) or "6" for 六.
-    -- Without these, kroki rejects answers WaniKani would have accepted and
+    -- Without these, minaosou rejects answers WaniKani would have accepted and
     -- then reports them back as incorrect, lowering the SRS stage.
   , subjAuxBlacklist     :: [Text]
     -- ^ Meanings WaniKani explicitly refuses (@auxiliary_meanings@ of type
@@ -607,7 +607,7 @@ getSubjectsByIds token = fetchBySubjectIdsChunked token (https "api.wanikani.com
 
 -- | A @study_materials@ record: the user's personal notes and synonyms for
 -- one subject. Only the meaning synonyms are of interest here -- they are
--- answers the user deliberately told WaniKani to accept, so kroki must
+-- answers the user deliberately told WaniKani to accept, so minaosou must
 -- accept them too.
 data StudyMaterial = StudyMaterial
   { smId              :: StudyMaterialId

@@ -6,16 +6,16 @@ cabal-version:      3.0
 -- Starting from the specification version 2.2, the cabal-version field must be
 -- the first thing in the cabal file.
 
-name:               kroki
-version:            0.9.9.0
+name:               minaosou
+version:            1.0.0
 synopsis:           WaniKani review client for the terminal
 description:
   A CLI/TUI application for doing WaniKani kanji and vocabulary reviews
   without leaving the terminal. Features include live romaji→hiragana
   conversion, British/American spelling normalisation, SRS stage display,
   pronunciation audio, and a review schedule overlay.
-homepage:           https://github.com/mwkuster/kroki
-bug-reports:        https://github.com/mwkuster/kroki/issues
+homepage:           https://github.com/mwkuster/minaosou
+bug-reports:        https://github.com/mwkuster/minaosou/issues
 license:            GPL-3.0-only
 license-file:       LICENSE
 author:             MWK
@@ -27,7 +27,7 @@ build-type:         Simple
 
 source-repository head
   type:     git
-  location: https://github.com/mwkuster/kroki
+  location: https://github.com/mwkuster/minaosou
 
 -- Extra doc files to be distributed with the package, such as a CHANGELOG or a README.
 extra-doc-files:    CHANGELOG.md
@@ -38,7 +38,7 @@ extra-doc-files:    CHANGELOG.md
 common warnings
     ghc-options: -Wall -threaded
 
-executable kroki
+executable minaosou
     -- Import common warning flags.
     import:           warnings
 
@@ -84,7 +84,7 @@ executable kroki
       build-depends: unix
       cpp-options:   -DHAS_POSIX
 
-test-suite kroki-test
+test-suite minaosou-test
     type:             exitcode-stdio-1.0
     main-is:          Spec.hs
     hs-source-dirs:   test, app, src

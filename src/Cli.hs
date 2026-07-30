@@ -33,7 +33,7 @@ data Options = Options
 parseCli :: IO Options
 parseCli = customExecParser cliPrefs parserInfo
 
--- | @helpShowGlobals@ makes @kroki <command> --help@ also list the global
+-- | @helpShowGlobals@ makes @minaosou <command> --help@ also list the global
 -- options (e.g. @--token@), so every option a command accepts is shown.
 cliPrefs :: ParserPrefs
 cliPrefs = prefs helpShowGlobals
@@ -43,8 +43,8 @@ parserInfo =
   info
     (optionsParser <**> helper)
     ( fullDesc
-   <> progDesc "kroki: tiny WaniKani CLI"
-   <> header "kroki" )
+   <> progDesc "minaosou: tiny WaniKani CLI"
+   <> header "minaosou" )
 
 optionsParser :: Parser Options
 optionsParser =
@@ -74,7 +74,7 @@ requeueAfterOption =
    <> help "Requeue a missed question K positions later (overrides config requeue_after)" )
 
 -- | @hsubparser@ attaches a @--help@ option to every command, so each
--- command's options are listed by @kroki <command> --help@.
+-- command's options are listed by @minaosou <command> --help@.
 commandParser :: Parser Command
 commandParser =
   hsubparser
@@ -87,7 +87,7 @@ commandParser =
     <> command "leeches"
          (info leechesParser (progDesc "List subjects tracked as leeches (repeated wrong answers across sessions)"))
     <> command "init"
-         (info (pure Init)   (progDesc "Create or overwrite ~/.config/kroki/config interactively"))
+         (info (pure Init)   (progDesc "Create or overwrite ~/.config/minaosou/config interactively"))
     )
   <|> pure (Study (StudyOpts Nothing Nothing))
 

@@ -6,16 +6,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 cabal build
-cabal run kroki            # starts a study session (default)
-cabal run kroki -- --help
-cabal run kroki -- whoami
-cabal run kroki -- reviews
-cabal run kroki -- study --batch-size 5
+cabal run minaosou            # starts a study session (default)
+cabal run minaosou -- --help
+cabal run minaosou -- whoami
+cabal run minaosou -- reviews
+cabal run minaosou -- study --batch-size 5
 ```
 
-Token resolution order: `--token` flag → `WANIKANI_API_TOKEN` env var → `~/.config/kroki/config`
+Token resolution order: `--token` flag → `WANIKANI_API_TOKEN` env var → `~/.config/minaosou/config`
 
-Config file format (`~/.config/kroki/config`):
+Config file format (`~/.config/minaosou/config`):
 ```
 token=<your-api-token>
 batch_size=10
@@ -37,7 +37,7 @@ This is a WaniKani (kanji/vocabulary SRS) CLI+TUI app. The study flow:
 
 - **`Api.hs`** — WaniKani REST API client (`req` library). Fetches users, summaries, assignments, subjects; submits reviews. Subjects are batch-fetched in chunks of 100.
 - **`Cli.hs`** — `optparse-applicative` command/option definitions (`WhoAmI`, `Reviews`, `Study`).
-- **`Config.hs`** — Simple key=value config file parser for `~/.config/kroki/config`.
+- **`Config.hs`** — Simple key=value config file parser for `~/.config/minaosou/config`.
 - **`Romaji.hs`** — Romaji→hiragana converter (longest-match-first lookup table). Handles consonant doubling, palatalized sounds, etc. Used by `Tui.normReading`.
 - **`Tui.hs`** — `brick`-based interactive study session. Manages a queue of questions (`QMeaning`/`QReading`), tracks per-subject progress, and produces `Submission` records. Modes: Normal → WrongAnswer → Feedback → ConfirmSubmit → Finished.
 

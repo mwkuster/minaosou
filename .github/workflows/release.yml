@@ -29,7 +29,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cabal
-          key: linux-static-cabal-${{ hashFiles('kroki.cabal') }}
+          key: linux-static-cabal-${{ hashFiles('minaosou.cabal') }}
           restore-keys: linux-static-cabal-
 
       - name: Update Cabal index
@@ -43,13 +43,13 @@ jobs:
 
       - name: Copy and strip binary
         run: |
-          cp $(cabal list-bin kroki) kroki-linux-x86_64
-          strip kroki-linux-x86_64
+          cp $(cabal list-bin minaosou) minaosou-linux-x86_64
+          strip minaosou-linux-x86_64
 
       - name: Upload to release
         uses: softprops/action-gh-release@v3
         with:
-          files: kroki-linux-x86_64
+          files: minaosou-linux-x86_64
 
   build-macos-arm64:
     name: macOS (arm64)
@@ -69,7 +69,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cabal
-          key: macos-arm64-cabal-${{ hashFiles('kroki.cabal') }}
+          key: macos-arm64-cabal-${{ hashFiles('minaosou.cabal') }}
           restore-keys: macos-arm64-cabal-
 
       - name: Update Cabal index
@@ -80,13 +80,13 @@ jobs:
 
       - name: Copy and strip binary
         run: |
-          cp $(cabal list-bin kroki) kroki-macos-arm64
-          strip kroki-macos-arm64
+          cp $(cabal list-bin minaosou) minaosou-macos-arm64
+          strip minaosou-macos-arm64
 
       - name: Upload to release
         uses: softprops/action-gh-release@v3
         with:
-          files: kroki-macos-arm64
+          files: minaosou-macos-arm64
 
   build-windows-x86_64:
     name: Windows (x86-64)
@@ -108,7 +108,7 @@ jobs:
         with:
           # ~/.cabal is Unix-only; use the store path the setup action reports.
           path: ${{ steps.setup.outputs.cabal-store }}
-          key: windows-x86_64-cabal-${{ hashFiles('kroki.cabal') }}
+          key: windows-x86_64-cabal-${{ hashFiles('minaosou.cabal') }}
           restore-keys: windows-x86_64-cabal-
 
       - name: Update Cabal index
@@ -120,9 +120,9 @@ jobs:
       - name: Copy binary
         # bash (Git Bash) is available on windows-latest; needed for $(...) + cp.
         shell: bash
-        run: cp "$(cabal list-bin kroki)" kroki-windows-x86_64.exe
+        run: cp "$(cabal list-bin minaosou)" minaosou-windows-x86_64.exe
 
       - name: Upload to release
         uses: softprops/action-gh-release@v3
         with:
-          files: kroki-windows-x86_64.exe
+          files: minaosou-windows-x86_64.exe

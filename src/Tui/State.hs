@@ -464,7 +464,7 @@ applyAddedSynonyms sid synonyms mSmId st =
 -- auxiliary meanings, and the user's own synonyms -- minus anything
 -- WaniKani explicitly blacklists.
 --
--- Checking against 'Api.subjMeanings' alone (as this used to) makes kroki
+-- Checking against 'Api.subjMeanings' alone (as this used to) makes minaosou
 -- stricter than WaniKani: roughly a third of subjects carry a whitelisted
 -- alternative, so a legitimate answer was marked wrong, requeued, recorded
 -- as a leech, /and/ submitted back to WaniKani as incorrect -- actively
