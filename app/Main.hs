@@ -155,13 +155,23 @@ main = do
               | null failed = pure (failed, 0 :: Int)
               | otherwise = do
                   now' <- getCurrentTime
-                  stillAvailable <- Api.getStillAvailableAssignmentIds t now'
-                    (map PendingReviews.prAssignmentId failed)
-                  let (genuine, alreadyRecorded) =
-                        partition
-                          (\p -> PendingReviews.prAssignmentId p `Set.member` stillAvailable)
-                          failed
-                  pure (genuine, length alreadyRecorded)
+                  -- The availability check is itself a network call, and the
+                  -- usual reason a batch failed is that the network is down --
+                  -- in which case this call fails too. It must never abort the
+                  -- caller, which is about to persist these failures for
+                  -- retry: losing an answered review is far worse than a
+                  -- redundant retry next run. So on any error, prune nothing
+                  -- and treat every failure as genuine.
+                  result <- trySync (Api.getStillAvailableAssignmentIds t now'
+                              (map PendingReviews.prAssignmentId failed))
+                  case result of
+                    Left _              -> pure (failed, 0)
+                    Right stillAvailable ->
+                      let (genuine, alreadyRecorded) =
+                            partition
+                              (\p -> PendingReviews.prAssignmentId p `Set.member` stillAvailable)
+                              failed
+                      in pure (genuine, length alreadyRecorded)
 
             -- Resubmit anything left over from a previous run's network
             -- trouble, using each item's original 'prCreatedAt' (the review
