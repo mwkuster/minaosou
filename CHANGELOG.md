@@ -1,5 +1,13 @@
 # Revision history for kroki
 
+## 0.9.8 -- 2026-07-30
+
+Two bug fixes.
+
+* **Answered reviews are no longer lost when the network drops mid-session.** If the connection failed while submitting, an internal check for already-recorded reviews (itself a network call) could throw before the failed reviews were saved for retry, so they were silently dropped — neither submitted nor queued. Failed reviews are now always persisted and automatically resubmitted on the next run.
+* **Text containing kanji/kana no longer clips at the right edge.** Wrapping measured width by character count, so every wide character pushed a line one cell past the pane and the terminal cut it off (a trailing kanji becoming `…`, a letter vanishing). Wrapping now measures true terminal display width.
+* Release workflow: bumped GitHub Actions off the deprecated Node 20 runtime.
+
 ## 0.9.7 -- 2026-07-27
 
 ### Answer acceptance
