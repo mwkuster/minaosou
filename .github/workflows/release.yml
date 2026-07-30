@@ -87,3 +87,42 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           files: kroki-macos-arm64
+
+  build-windows-x86_64:
+    name: Windows (x86-64)
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up GHC
+        id: setup
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: '9.6'
+          cabal-version: 'latest'
+
+      - name: Cache Cabal store
+        uses: actions/cache@v5
+        with:
+          # ~/.cabal is Unix-only; use the store path the setup action reports.
+          path: ${{ steps.setup.outputs.cabal-store }}
+          key: windows-x86_64-cabal-${{ hashFiles('kroki.cabal') }}
+          restore-keys: windows-x86_64-cabal-
+
+      - name: Update Cabal index
+        run: cabal update
+
+      - name: Build binary
+        run: cabal build
+
+      - name: Copy binary
+        # bash (Git Bash) is available on windows-latest; needed for $(...) + cp.
+        shell: bash
+        run: cp "$(cabal list-bin kroki)" kroki-windows-x86_64.exe
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: kroki-windows-x86_64.exe
