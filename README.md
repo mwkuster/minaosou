@@ -37,13 +37,20 @@ A terminal client for [WaniKani](https://www.wanikani.com/) — do your kanji an
 
 ### Pre-built binaries
 
-Download the binary for your platform from the [latest release](https://github.com/mwkuster/kroki/releases/latest), then put it on your `PATH`:
+Download the binary for your platform from the [latest release](https://github.com/mwkuster/kroki/releases/latest):
+
+- `kroki-linux-x86_64` — Linux (static, x86-64)
+- `kroki-macos-arm64` — macOS (Apple Silicon)
+- `kroki-windows-x86_64.exe` — Windows (x86-64)
+
+On Linux/macOS, make it executable and put it on your `PATH`:
 
 ```bash
-# Linux (static x86-64) or macOS (arm64)
 chmod +x kroki-linux-x86_64          # or kroki-macos-arm64
 mv kroki-linux-x86_64 ~/.local/bin/kroki
 ```
+
+On Windows, place `kroki-windows-x86_64.exe` somewhere on your `PATH`. Use a modern terminal (Windows Terminal) for correct Japanese/wide-character rendering — the legacy console renders kanji poorly.
 
 ### Build from source
 
