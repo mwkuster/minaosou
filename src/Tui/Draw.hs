@@ -7,13 +7,14 @@ module Tui.Draw
 
 import qualified Api
 import Tui.State
-import Util (strPadLeft, strPadRight)
+import Util (strPadLeft, strPadRight, wrapTextWidth)
 
 import Brick
 import qualified Brick.Widgets.Border as B
 import qualified Brick.Widgets.Center as C
 import qualified Brick.Widgets.List as L
 import qualified Graphics.Vty as V
+import Lens.Micro ((^.))
 
 import qualified Data.Map.Strict as M
 import Data.Maybe (mapMaybe, fromMaybe)
@@ -91,11 +92,11 @@ drawMain st
                     Nothing  -> []
                 errorWidgets =
                   case stError st of
-                    Just msg -> [padTop (Pad 1) (withAttr (attrName "bad") (txtWrap msg))]
+                    Just msg -> [padTop (Pad 1) (withAttr (attrName "bad") (wideTxtWrap msg))]
                     Nothing  -> []
                 noticeWidgets =
                   case stNotice st of
-                    Just msg -> [padTop (Pad 1) (withAttr (attrName "ok") (txtWrap msg))]
+                    Just msg -> [padTop (Pad 1) (withAttr (attrName "ok") (wideTxtWrap msg))]
                     Nothing  -> []
                 breakdownWidgets = drawBreakdown st
                 hintLine =
@@ -150,14 +151,14 @@ drawMain st
             ++ ( case stError st of
                    Just msg ->
                      [ padTop (Pad 1)
-                         (withAttr (attrName "bad") (txtWrap msg))
+                         (withAttr (attrName "bad") (wideTxtWrap msg))
                      ]
                    Nothing -> []
                )
             ++ ( case stNotice st of
                    Just msg ->
                      [ padTop (Pad 1)
-                         (withAttr (attrName "ok") (txtWrap msg))
+                         (withAttr (attrName "ok") (wideTxtWrap msg))
                      ]
                    Nothing -> []
                )
@@ -190,18 +191,18 @@ drawMode st q =
             | otherwise = ("", [])
       in vBox $
         [ withAttr (attrName "bad") $
-            txtWrap ("✗ you entered: " <> shownInput)
+            wideTxtWrap ("✗ you entered: " <> shownInput)
         , withAttr (attrName "ok") $
-            txtWrap ("✓ accepted:    " <> T.pack (intercalate ", " expected))
+            wideTxtWrap ("✓ accepted:    " <> T.pack (intercalate ", " expected))
         ]
-        ++ [ padTop (Pad 1) $ withAttr (attrName "bad") $ txtWrap ("⚠ " <> c)
+        ++ [ padTop (Pad 1) $ withAttr (attrName "bad") $ wideTxtWrap ("⚠ " <> c)
            | Just c <- [confusionHint st q input]
            ]
         ++ [ padTop (Pad 1) $
-               txtWrap (compLabel <> T.intercalate "  ·  " compHints)
+               wideTxtWrap (compLabel <> T.intercalate "  ·  " compHints)
            | not (null compHints)
            ]
-        ++ [ padTop (Pad 1) $ txtWrap (stripWkTags m)
+        ++ [ padTop (Pad 1) $ wideTxtWrap (stripWkTags m)
            | Just m <- [mnemonic]
            ]
 
@@ -279,8 +280,8 @@ componentRadicalMeanings = componentInfo (\c -> Api.subjType c == Api.Radical) A
 -- the rest of the (all dim) detail lines.
 drawSubmitDetail :: String -> Widget Name
 drawSubmitDetail d
-  | "incorrect" `T.isInfixOf` T.pack d = withAttr (attrName "bad")  $ txtWrap (T.pack d)
-  | otherwise                          = withAttr (attrName "hint") $ txtWrap (T.pack d)
+  | "incorrect" `T.isInfixOf` T.pack d = withAttr (attrName "bad")  $ wideTxtWrap (T.pack d)
+  | otherwise                          = withAttr (attrName "hint") $ wideTxtWrap (T.pack d)
 
 drawConfirmSubmit :: AppState -> Widget Name
 drawConfirmSubmit st =
@@ -391,7 +392,7 @@ drawAllInfo q st =
     mnSection title (Just t) =
       [ str ""
       , withAttr (attrName "hint") (str (title <> ":"))
-      , txtWrap (stripWkTags t)
+      , wideTxtWrap (stripWkTags t)
       ]
 
 drawUserInfo :: AppState -> Widget Name
@@ -485,11 +486,25 @@ stripWkTags t = T.pack (go (T.unpack t))
     go ('<':cs)  = go (drop 1 (dropWhile (/= '>') cs))
     go (c  :cs)  = c : go cs
 
+-- | Like Brick's 'txtWrap', but wraps by terminal /display/ width so lines
+-- containing CJK (kanji/kana, rendered 2 cells wide) don't overflow the pane
+-- and get clipped. Brick's 'txtWrap' measures by code-point count, which
+-- undercounts every wide character; in a Japanese-learning app that means
+-- essentially every wrapped feedback/mnemonic line was breaking a column or
+-- two too late. Reads the available width from the render context so it
+-- adapts to the current pane size.
+wideTxtWrap :: Text -> Widget n
+wideTxtWrap t =
+  Widget Greedy Fixed $ do
+    ctx <- getContext
+    let w = ctx ^. availWidthL
+    render (txt (T.intercalate "\n" (wrapTextWidth w t)))
+
 -- | Render a list of hint strings as auto-wrapping text.
 hintBox :: [Text] -> Widget Name
 hintBox hints =
   withAttr (attrName "hint") $
-    txtWrap (T.intercalate "  " hints)
+    wideTxtWrap (T.intercalate "  " hints)
 
 srsIndicator :: Q -> AppState -> String
 srsIndicator q st =

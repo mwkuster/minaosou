@@ -71,6 +71,7 @@ executable kroki
       , random
       , brick
       , vty
+      , microlens
       , vector
       , vty-crossplatform
       , process
@@ -107,6 +108,7 @@ test-suite kroki-test
       , random
       , brick
       , vty
+      , microlens
       , vty-crossplatform
       , vector
       , process

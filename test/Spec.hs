@@ -11,6 +11,7 @@ import qualified Data.ByteString as BS
 import Data.ByteString.Lazy (ByteString)
 import Data.Char (isDigit)
 import qualified Data.Map.Strict as M
+import qualified Data.Text as T
 import Data.Time (UTCTime(..), addUTCTime, fromGregorian, getCurrentTime, secondsToDiffTime)
 import qualified Network.HTTP.Client as HC
 import qualified Network.HTTP.Client.Internal as HCI
@@ -643,6 +644,35 @@ utilSpec = describe "Util" $ do
       case outcome of
         Left _  -> pure ()
         Right _ -> expectationFailure "trySync swallowed an asynchronous exception"
+
+  describe "displayWidth" $ do
+    it "counts ASCII as one cell each"        $ Util.displayWidth "abc"  `shouldBe` 3
+    it "counts a kanji as two cells"          $ Util.displayWidth "贅"    `shouldBe` 2
+    it "counts kana as two cells each"        $ Util.displayWidth "ぜい"  `shouldBe` 4
+    it "mixes ASCII and wide characters"      $ Util.displayWidth "a贅b"  `shouldBe` 4
+    it "is zero for empty text"               $ Util.displayWidth ""     `shouldBe` 0
+
+  describe "wrapTextWidth" $ do
+    it "leaves a line that already fits verbatim (alignment spaces intact)" $
+      Util.wrapTextWidth 40 "accepted:    ぜい" `shouldBe` ["accepted:    ぜい"]
+
+    it "keeps existing newlines as hard breaks" $
+      Util.wrapTextWidth 80 "line one\nline two" `shouldBe` ["line one", "line two"]
+
+    -- The bug: naive (code-point) wrapping counts "ab ぜい" as length 5 and
+    -- leaves it on one line, but it is 7 display cells wide and overflows a
+    -- 6-wide pane. Display-width wrapping must break it earlier.
+    it "wraps by display width, not code-point count" $
+      Util.wrapTextWidth 6 "ab ぜい cd" `shouldBe` ["ab", "ぜい", "cd"]
+
+    it "never emits a line wider than the limit (CJK-heavy prose)" $ do
+      let mnemonic = "you eat them with a zeiber (ぜい), a German saber. "
+                  <> "A fork is just too plain for these extravagant shellfish."
+          limit    = 30
+          lns      = Util.wrapTextWidth limit mnemonic
+      all ((<= limit) . Util.displayWidth) lns `shouldBe` True
+      -- and nothing is dropped: rejoining recovers every word
+      T.words (T.unwords lns) `shouldBe` T.words mnemonic
 
 --------------------------------------------------------------------------------
 -- JsonStore

@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Util
@@ -5,6 +6,8 @@ module Util
   , strPadRight
   , shortErr
   , trySync
+  , displayWidth
+  , wrapTextWidth
   ) where
 
 import Control.Exception
@@ -16,6 +19,9 @@ import Control.Exception
   , try
   )
 import qualified Data.ByteString.Char8 as BS8
+import Data.Text (Text)
+import qualified Data.Text as T
+import Graphics.Text.Width (safeWcwidth)
 import qualified Network.HTTP.Client as HC
 import qualified Network.HTTP.Req as Req
 import Network.HTTP.Types (statusCode, statusMessage)
@@ -27,6 +33,35 @@ strPadLeft n s = replicate (max 0 (n - length s)) ' ' <> s
 -- | Pad a String on the right with spaces to at least n characters (left-aligns text).
 strPadRight :: Int -> String -> String
 strPadRight n s = s <> replicate (max 0 (n - length s)) ' '
+
+-- | Terminal display width of text: East-Asian wide characters (kanji, kana)
+-- count as 2 cells, control characters as 0 -- matching how vty actually
+-- renders them. Brick's built-in 'txtWrap' instead measures by 'T.length'
+-- (one per code point), so a wrapped line containing CJK is under-measured
+-- and overflows its pane, and the terminal clips the right edge -- the
+-- classic "the line break is off by one (per wide char)" symptom.
+displayWidth :: Text -> Int
+displayWidth = T.foldl' (\acc c -> acc + safeWcwidth c) 0
+
+-- | Greedy word-wrap to a maximum /display/ width (wide-char aware), for use
+-- where Brick's 'txtWrap' would miscount CJK. Existing newlines are kept as
+-- hard breaks (and blank lines preserved); within a paragraph, words are
+-- packed by display width. A line that already fits is returned verbatim, so
+-- deliberate alignment spacing on short lines is untouched. A single word
+-- wider than the limit is left on its own line rather than dropped.
+wrapTextWidth :: Int -> Text -> [Text]
+wrapTextWidth limit = concatMap wrapParagraph . T.splitOn "\n"
+  where
+    w = max 1 limit
+    wrapParagraph para
+      | displayWidth para <= w = [para]
+      | otherwise = case T.words para of
+          []     -> [""]
+          (x:xs) -> fill x xs
+    fill cur [] = [cur]
+    fill cur (y:ys)
+      | displayWidth cur + 1 + displayWidth y <= w = fill (cur <> " " <> y) ys
+      | otherwise                                  = cur : fill y ys
 
 -- | One-line, human-readable summary of an exception, short enough to drop
 -- into a TUI line or a log entry.
