@@ -3,6 +3,7 @@
 A terminal client for [WaniKani](https://www.wanikani.com/) — do your kanji and vocabulary SRS reviews without leaving the command line.
 
 ```
+                                                                                             ⏱ 12:34
 ┌── Queue ─────────────────────┐ ┌── Current · Apprentice ──────────────────────────────────────────┐
 │ 日 (Kanji) [meaning]         │ │                                                                  │
 │ 学校 (Vocab) [reading]       │ │  日 — meaning                                                    │
@@ -24,6 +25,7 @@ A terminal client for [WaniKani](https://www.wanikani.com/) — do your kanji an
 - British/American spelling normalisation for meaning answers
 - Per-item level, SRS stage, mnemonics, and component breakdowns (Ctrl-a) — kanji info lists vocabulary that uses the kanji; vocabulary info shows the readings of each component kanji
 - Review schedule for the next 24 hours (Ctrl-v)
+- Session timer in the top-right corner, counting up from the start of the session
 - Optional pronunciation audio via an external player (Ctrl-p), with an opt-in auto-play on a reading question's first appearance (`audio_autoplay`)
 - Submits results back to WaniKani at the end of each batch; post-submit list shows the resulting SRS stage per item, with incorrect items highlighted
 - Configurable batch size (0 = all available reviews)

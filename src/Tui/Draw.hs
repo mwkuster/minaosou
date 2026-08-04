@@ -34,17 +34,38 @@ theMap = attrMap V.defAttr
   , (attrName "hint",    V.defAttr `V.withStyle` V.dim)
   , (attrName "bigchar", V.defAttr `V.withStyle` V.bold `V.withForeColor` V.brightYellow)
   , (attrName "input",   V.defAttr `V.withForeColor` V.brightWhite)
+  , (attrName "timer",   V.defAttr `V.withStyle` V.dim)
   ]
+
+-- Widths of the two panes; 'sessionWidth' is the total the session UI
+-- occupies, which the timer row is right-aligned within.
+queueWidth, mainWidth, sessionWidth :: Int
+queueWidth   = 28
+mainWidth    = 80
+sessionWidth = queueWidth + 1 + 1 + mainWidth   -- panes + vBorder + gap
 
 drawUi :: AppState -> [Widget Name]
 drawUi st =
   [ C.center $
-      hBox
-        [ hLimit 28 $ drawQueue st
-        , B.vBorder
-        , padLeft (Pad 1) $ hLimit 80 $ drawMain st
-        ]
+      hLimit sessionWidth $
+        vBox
+          [ drawSessionTimer st
+          , hBox
+              [ hLimit queueWidth $ drawQueue st
+              , B.vBorder
+              , padLeft (Pad 1) $ hLimit mainWidth $ drawMain st
+              ]
+          ]
   ]
+
+-- | Elapsed session time, in the top-right corner above the panes. Drawn as
+-- part of the layout rather than as an overlaying layer: a layer positioned
+-- over the corner covers the box border underneath it.
+drawSessionTimer :: AppState -> Widget Name
+drawSessionTimer st =
+  padLeft Max $
+    withAttr (attrName "timer") $
+      str (elapsedLabel st)
 
 drawQueue :: AppState -> Widget Name
 drawQueue st =

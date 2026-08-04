@@ -55,6 +55,8 @@ handleEvent _ _ _ (AppEvent (SubmitDone result)) =
       , stSubmitAttempted = True
       }
 handleEvent _ _ _ (AppEvent (SynonymDone result)) = handleSynonymDone result
+handleEvent _ _ _ (AppEvent (Tick now)) =
+  modify $ \st -> st { stClock = now }
 handleEvent refreshFn submitFn submitSynonymFn (VtyEvent ev) = do
   st <- get
   if stOverlay st /= NoOverlay

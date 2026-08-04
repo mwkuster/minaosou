@@ -116,6 +116,8 @@ stateWith prog subjToAsg = Tui.AppState
   , Tui.stSummary       = Api.Summary { Api.summaryReviews = [] }
   , Tui.stNow           = UTCTime (fromGregorian 2024 1 1) (secondsToDiffTime 0)
   , Tui.stTZ            = utc
+  , Tui.stSessionStart  = UTCTime (fromGregorian 2024 1 1) (secondsToDiffTime 0)
+  , Tui.stClock         = UTCTime (fromGregorian 2024 1 1) (secondsToDiffTime 0)
   , Tui.stSubmitChan    = error "stSubmitChan: not used in pure tests"
   , Tui.stLastCompleted = Nothing
   , Tui.stPriorWrong    = M.empty
@@ -514,3 +516,25 @@ spec = do
     it "is False once already marked auto-played" $
       let st' = Tui.markAutoplayed readingQ autoplayReady
       in Tui.shouldAutoplay st' readingQ `shouldBe` False
+
+  describe "formatElapsed" $ do
+    let t0 = UTCTime (fromGregorian 2024 1 1) (secondsToDiffTime 0)
+        after n = UTCTime (fromGregorian 2024 1 1) (secondsToDiffTime n)
+
+    it "renders zero elapsed" $
+      Tui.formatElapsed t0 t0 `shouldBe` "00:00"
+
+    it "zero-pads minutes and seconds" $
+      Tui.formatElapsed t0 (after 65) `shouldBe` "01:05"
+
+    it "keeps MM:SS just under an hour" $
+      Tui.formatElapsed t0 (after 3599) `shouldBe` "59:59"
+
+    it "switches to H:MM:SS at an hour" $
+      Tui.formatElapsed t0 (after 3600) `shouldBe` "1:00:00"
+
+    it "truncates sub-second remainders instead of rounding up" $
+      Tui.formatElapsed t0 (after 90) `shouldBe` "01:30"
+
+    it "clamps a backwards clock to zero" $
+      Tui.formatElapsed (after 60) t0 `shouldBe` "00:00"

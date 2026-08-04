@@ -60,6 +60,10 @@ module Tui.State
   , shouldAutoplay
   , markAutoplayed
   , missedBeforeLabel
+
+    -- Session timer
+  , formatElapsed
+  , elapsedLabel
   ) where
 
 import qualified Api
@@ -74,7 +78,7 @@ import Data.Maybe (catMaybes, isJust)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
-import Data.Time (UTCTime)
+import Data.Time (UTCTime, diffUTCTime, nominalDiffTimeToSeconds)
 import Data.Time.LocalTime (TimeZone)
 import qualified Data.Vector as Vec
 
@@ -151,6 +155,7 @@ data Mode
 data AppEvent
   = SubmitDone  (Either SomeException SubmitResult)
   | SynonymDone (Either SomeException Api.StudyMaterial)
+  | Tick UTCTime                 -- ^ one-second clock tick for the session timer
 
 data AppState = AppState
   { stQueue        :: [Q]
@@ -176,6 +181,8 @@ data AppState = AppState
   , stSummary       :: Api.Summary
   , stNow           :: UTCTime
   , stTZ            :: TimeZone
+  , stSessionStart  :: UTCTime                         -- when this study session began
+  , stClock         :: UTCTime                         -- wall clock, advanced by 'Tick'
   , stSubmitChan    :: BChan AppEvent                  -- background submission notifications
   , stLastCompleted :: Maybe Q                         -- last question to leave the queue head
   , stPriorWrong    :: M.Map Api.SubjectId (Int, Int)  -- cross-session wrong counts, read-only this session
@@ -631,3 +638,25 @@ normReading t =
 collapseSpaces :: Text -> Text
 collapseSpaces =
   T.unwords . filter (not . T.null) . T.words
+
+--------------------------------------------------------------------------------
+-- Session timer
+--------------------------------------------------------------------------------
+
+-- | Elapsed time between two instants as @MM:SS@, or @H:MM:SS@ past the hour.
+-- A clock that ran backwards (system time adjustment) clamps to zero rather
+-- than rendering a negative duration.
+formatElapsed :: UTCTime -> UTCTime -> String
+formatElapsed start now =
+  let secs  = max 0 (floor (nominalDiffTimeToSeconds (diffUTCTime now start))) :: Int
+      (h, r) = secs `divMod` 3600
+      (m, s) = r `divMod` 60
+  in if h > 0
+       then show h <> ":" <> pad2 m <> ":" <> pad2 s
+       else pad2 m <> ":" <> pad2 s
+  where
+    pad2 n = let d = show n in replicate (2 - length d) '0' <> d
+
+-- | The session timer as shown in the top-right corner.
+elapsedLabel :: AppState -> String
+elapsedLabel st = "⏱ " <> formatElapsed (stSessionStart st) (stClock st)

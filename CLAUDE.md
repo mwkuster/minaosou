@@ -52,6 +52,10 @@ This is a WaniKani (kanji/vocabulary SRS) CLI+TUI app. The study flow:
 - `Ctrl-s` — submit batch to WaniKani
 - `Esc`/`Ctrl-q` — quit
 
+### Session timer
+
+The top-right corner shows elapsed session time (`⏱ MM:SS`, `H:MM:SS` past the hour). A background thread in `Tui.withTicker` posts a `Tick` event once a second, which only updates `stClock`; `stSessionStart` is the wall clock at TUI start. The timer is a row in the layout, not a `Brick` layer — a layer over the corner covers the box border underneath it.
+
 ### Key Types
 
 ```haskell
