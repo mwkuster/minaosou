@@ -58,7 +58,7 @@ The top-right corner shows elapsed session time (`⏱ MM:SS`, `H:MM:SS` past the
 
 The clock **stops** when the last item leaves the queue: `Tui.Event.accountTime` runs after every key event and calls `freezeClock`, which sets `stSessionEnd` once `stQueue` is empty. Display reads `stSessionEnd` in preference to `stClock`, so ticks after the end are ignored. Freezing on a key event rather than on a `Tick` keeps the stop time at the moment of the last answer.
 
-The same hook charges the interval since `stLastSample` to whichever subject was on screen for it (`chargeTime` → `stSubjTime`), so an item's total covers both its questions, wrong-answer screens, overlays, and requeued retries. The Done screen shows `session:`/`avg/item:` and an `avg:` column per breakdown row; the per-row denominator counts only subjects that got screen time, so an abandoned session isn't averaged over items it never showed.
+The same hook charges the interval since `stLastSample` to whichever subject was on screen for it (`chargeTime` → `stSubjTime`), so an item's total covers both its questions, wrong-answer screens, overlays, and requeued retries. The Done screen shows `avg/item:` and an `avg:` column per breakdown row; the per-row denominator counts only subjects that got screen time, so an abandoned session isn't averaged over items it never showed. It deliberately does **not** repeat the session total — the stopped corner timer is already showing it.
 
 ### Key Types
 

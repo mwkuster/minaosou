@@ -140,8 +140,9 @@ drawMain st
                    , str ("wrong:       " <> show (stWrong st))
                    , str ("overridden:  " <> show (stOverridden st))
                    , str ("submissions: " <> show (length (mkSubmissions st)))
-                   , str ("session:     " <> sessionElapsed st)
                    ]
+                -- No "session:" line: the corner timer stops at the last
+                -- answer, so it is already showing the session total here.
                 ++ [ str ("avg/item:    " <> avg) | Just avg <- [sessionAvgPerItem st] ]
                 ++ breakdownWidgets
                 ++ confirmWidgets
