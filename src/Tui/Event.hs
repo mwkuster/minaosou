@@ -19,7 +19,7 @@ import Control.Concurrent (forkIO)
 import Control.Exception (SomeException, try)
 import Control.Monad (void)
 import Control.Monad.IO.Class (liftIO)
-import Data.Time (UTCTime)
+import Data.Time (UTCTime, getCurrentTime)
 import qualified Data.Text as T
 import System.Process (spawnProcess)
 import System.Random (randomRIO)
@@ -59,6 +59,9 @@ handleEvent _ _ _ (AppEvent (Tick now)) =
   modify $ \st -> st { stClock = now }
 handleEvent refreshFn submitFn submitSynonymFn (VtyEvent ev) = do
   st <- get
+  -- Whatever was on screen while the user was thinking gets charged the time
+  -- this event ends, so it has to be read before the handler runs.
+  let onScreen = Api.subjId . qSubject <$> currentQuestion st
   if stOverlay st /= NoOverlay
     then handleOverlay ev
     else do
@@ -71,7 +74,17 @@ handleEvent refreshFn submitFn submitSynonymFn (VtyEvent ev) = do
         Finished            -> handleFinished refreshFn ev
         _                   -> handleNormal refreshFn ev
       autoplayIfNeeded
+  accountTime onScreen
 handleEvent _ _ _ _ = pure ()
+
+-- | Close out the interval that just ended: charge it to the item that was on
+-- screen for it, and stop the session timer if that event emptied the queue.
+-- Driven by key events rather than by 'Tick' so the stop time is the moment
+-- of the last answer, not up to a second later.
+accountTime :: Maybe Api.SubjectId -> EventM Name AppState ()
+accountTime onScreen = do
+  now <- liftIO getCurrentTime
+  modify (freezeClock now . chargeTime onScreen now)
 
 -- | Auto-play the current question's audio on its first appearance this
 -- session (config-gated). Called after every key event regardless of which

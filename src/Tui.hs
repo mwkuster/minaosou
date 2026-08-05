@@ -73,6 +73,9 @@ runStudyTui cfg user summary now tz allSubjects subjToAsg priorWrong subjects re
         , stTZ            = tz
         , stSessionStart  = start
         , stClock         = start
+        , stSessionEnd    = Nothing
+        , stLastSample    = start
+        , stSubjTime      = M.empty
         , stSubmitChan    = chan
         , stLastCompleted = Nothing
         , stPriorWrong    = priorWrong

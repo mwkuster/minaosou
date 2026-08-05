@@ -118,6 +118,9 @@ stateWith prog subjToAsg = Tui.AppState
   , Tui.stTZ            = utc
   , Tui.stSessionStart  = UTCTime (fromGregorian 2024 1 1) (secondsToDiffTime 0)
   , Tui.stClock         = UTCTime (fromGregorian 2024 1 1) (secondsToDiffTime 0)
+  , Tui.stSessionEnd    = Nothing
+  , Tui.stLastSample    = UTCTime (fromGregorian 2024 1 1) (secondsToDiffTime 0)
+  , Tui.stSubjTime      = M.empty
   , Tui.stSubmitChan    = error "stSubmitChan: not used in pure tests"
   , Tui.stLastCompleted = Nothing
   , Tui.stPriorWrong    = M.empty
@@ -538,3 +541,51 @@ spec = do
 
     it "clamps a backwards clock to zero" $
       Tui.formatElapsed (after 60) t0 `shouldBe` "00:00"
+
+  describe "formatAvgPerItem" $ do
+    it "is Nothing with no items" $
+      Tui.formatAvgPerItem 100 0 `shouldBe` Nothing
+
+    it "shows one decimal of seconds" $
+      Tui.formatAvgPerItem 42 5 `shouldBe` Just "8.4s"
+
+    it "switches to M:SS at a minute" $
+      Tui.formatAvgPerItem 300 4 `shouldBe` Just "1:15"
+
+    it "carries the minute rather than rounding to :60" $
+      Tui.formatAvgPerItem 119.7 1 `shouldBe` Just "2:00"
+
+  describe "freezeClock / chargeTime" $ do
+    let t0' = UTCTime (fromGregorian 2024 1 1) (secondsToDiffTime 0)
+        at n = UTCTime (fromGregorian 2024 1 1) (secondsToDiffTime n)
+        base = stateWith M.empty M.empty
+
+    it "stops the clock when the queue is empty" $
+      Tui.stSessionEnd (Tui.freezeClock (at 30) base { Tui.stQueue = [] })
+        `shouldBe` Just (at 30)
+
+    it "leaves the clock running while questions remain" $
+      Tui.stSessionEnd (Tui.freezeClock (at 30) base { Tui.stQueue = [mkQ kanjiSubj Tui.QMeaning] })
+        `shouldBe` Nothing
+
+    it "keeps the first stop time once stopped" $
+      let st1 = Tui.freezeClock (at 30) base
+          st2 = Tui.freezeClock (at 90) st1
+      in Tui.stSessionEnd st2 `shouldBe` Just (at 30)
+
+    it "reports elapsed time as of the stop, not the ticking clock" $
+      let st' = (Tui.freezeClock (at 30) base) { Tui.stClock = at 300 }
+      in Tui.sessionElapsed st' `shouldBe` "00:30"
+
+    it "charges the interval to the item that was on screen" $
+      let st' = Tui.chargeTime (Just (sid 1)) (at 12) base { Tui.stLastSample = t0' }
+      in Tui.subjectTime st' (sid 1) `shouldBe` 12
+
+    it "accumulates across a subject's later appearances" $
+      let st1 = Tui.chargeTime (Just (sid 1)) (at 12) base
+          st2 = Tui.chargeTime (Just (sid 1)) (at 20) st1
+      in Tui.subjectTime st2 (sid 1) `shouldBe` 20
+
+    it "drops the interval when no question is on screen" $
+      let st' = Tui.chargeTime Nothing (at 12) base
+      in (M.null (Tui.stSubjTime st'), Tui.stLastSample st') `shouldBe` (True, at 12)
