@@ -3,6 +3,7 @@
 A terminal client for [WaniKani](https://www.wanikani.com/) — do your kanji and vocabulary SRS reviews without leaving the command line.
 
 ```
+                                                                                             ⏱ 12:34
 ┌── Queue ─────────────────────┐ ┌── Current · Apprentice ──────────────────────────────────────────┐
 │ 日 (Kanji) [meaning]         │ │                                                                  │
 │ 学校 (Vocab) [reading]       │ │  日 — meaning                                                    │
@@ -24,11 +25,12 @@ A terminal client for [WaniKani](https://www.wanikani.com/) — do your kanji an
 - British/American spelling normalisation for meaning answers
 - Per-item level, SRS stage, mnemonics, and component breakdowns (Ctrl-a) — kanji info lists vocabulary that uses the kanji; vocabulary info shows the readings of each component kanji
 - Review schedule for the next 24 hours (Ctrl-v)
+- Session timer in the top-right corner, counting up from the start of the session and stopping when the last item is answered
 - Optional pronunciation audio via an external player (Ctrl-p), with an opt-in auto-play on a reading question's first appearance (`audio_autoplay`)
 - Submits results back to WaniKani at the end of each batch; post-submit list shows the resulting SRS stage per item, with incorrect items highlighted
 - Configurable batch size (0 = all available reviews)
 - Wrong-answer screen auto-surfaces the relevant mnemonic, flags visually-similar-kanji mix-ups by name, and shows the components that build the answer — component kanji and their meanings/readings for vocabulary, component radicals and their meanings for kanji; scrollable if it doesn't fit
-- End-of-session accuracy breakdown by subject type and SRS stage
+- End-of-session accuracy breakdown by subject type and SRS stage, each row with the average time spent per item
 - Cross-session leech tracking (`minaosou leeches`): lists subjects you keep getting wrong across sessions, and `minaosou leeches --study` lets you drill them in a dedicated practice session that is never submitted to WaniKani
 - Colour scheme puts visual focus on the current answer rather than the queue: unselected queue items are dimmed, and the answer input is rendered at full brightness
 - Resilient submission: transient network failures (timeouts, dropped connections, 429/5xx) are retried automatically with backoff; a review that still fails to reach WaniKani is saved locally and retried automatically the next time you run `minaosou`, without asking you to answer it again

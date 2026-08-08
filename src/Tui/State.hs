@@ -60,6 +60,15 @@ module Tui.State
   , shouldAutoplay
   , markAutoplayed
   , missedBeforeLabel
+
+    -- Session timer
+  , formatElapsed
+  , formatAvgPerItem
+  , elapsedLabel
+  , sessionElapsed
+  , chargeTime
+  , freezeClock
+  , subjectTime
   ) where
 
 import qualified Api
@@ -70,12 +79,13 @@ import qualified Brick.Widgets.List as L
 import Control.Exception (SomeException)
 import Data.List (intercalate)
 import qualified Data.Map.Strict as M
-import Data.Maybe (catMaybes, isJust)
+import Data.Maybe (catMaybes, fromMaybe, isJust)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
-import Data.Time (UTCTime)
+import Data.Time (NominalDiffTime, UTCTime, diffUTCTime, nominalDiffTimeToSeconds)
 import Data.Time.LocalTime (TimeZone)
+import Numeric (showFFloat)
 import qualified Data.Vector as Vec
 
 --------------------------------------------------------------------------------
@@ -151,6 +161,7 @@ data Mode
 data AppEvent
   = SubmitDone  (Either SomeException SubmitResult)
   | SynonymDone (Either SomeException Api.StudyMaterial)
+  | Tick UTCTime                 -- ^ one-second clock tick for the session timer
 
 data AppState = AppState
   { stQueue        :: [Q]
@@ -176,6 +187,18 @@ data AppState = AppState
   , stSummary       :: Api.Summary
   , stNow           :: UTCTime
   , stTZ            :: TimeZone
+  , stSessionStart  :: UTCTime                         -- when this study session began
+  , stClock         :: UTCTime                         -- wall clock, advanced by 'Tick'
+  , stSessionEnd    :: Maybe UTCTime
+    -- ^ Set when the last item leaves the queue, which stops the timer: the
+    -- figure the user is meant to read is how long the reviews took, not how
+    -- long the Done screen has been open.
+  , stLastSample    :: UTCTime                         -- last instant charged to an item
+  , stSubjTime      :: M.Map Api.SubjectId NominalDiffTime
+    -- ^ Wall time charged to each subject: every stretch between two key
+    -- events goes to whichever item was on screen, so a subject's total
+    -- covers both its questions, any wrong-answer screens and overlays, and
+    -- each requeued retry.
   , stSubmitChan    :: BChan AppEvent                  -- background submission notifications
   , stLastCompleted :: Maybe Q                         -- last question to leave the queue head
   , stPriorWrong    :: M.Map Api.SubjectId (Int, Int)  -- cross-session wrong counts, read-only this session
@@ -631,3 +654,72 @@ normReading t =
 collapseSpaces :: Text -> Text
 collapseSpaces =
   T.unwords . filter (not . T.null) . T.words
+
+--------------------------------------------------------------------------------
+-- Session timer
+--------------------------------------------------------------------------------
+
+-- | Elapsed time between two instants as @MM:SS@, or @H:MM:SS@ past the hour.
+-- A clock that ran backwards (system time adjustment) clamps to zero rather
+-- than rendering a negative duration.
+formatElapsed :: UTCTime -> UTCTime -> String
+formatElapsed start now =
+  let secs  = max 0 (floor (nominalDiffTimeToSeconds (diffUTCTime now start))) :: Int
+      (h, r) = secs `divMod` 3600
+      (m, s) = r `divMod` 60
+  in if h > 0
+       then show h <> ":" <> pad2 m <> ":" <> pad2 s
+       else pad2 m <> ":" <> pad2 s
+
+pad2 :: Int -> String
+pad2 n = let d = show n in replicate (2 - length d) '0' <> d
+
+-- | Now, or the instant the session's last item was answered once it has been.
+sessionAsOf :: AppState -> UTCTime
+sessionAsOf st = fromMaybe (stClock st) (stSessionEnd st)
+
+-- | Elapsed session time, stopped at the last answer.
+sessionElapsed :: AppState -> String
+sessionElapsed st = formatElapsed (stSessionStart st) (sessionAsOf st)
+
+-- | The session timer as shown in the top-right corner.
+elapsedLabel :: AppState -> String
+elapsedLabel st = "⏱ " <> sessionElapsed st
+
+-- | Mean time per item, given a total and the number of items it covers.
+-- 'Nothing' for no items -- there is nothing to average, and the caller
+-- should leave the line out rather than print a zero.
+formatAvgPerItem :: NominalDiffTime -> Int -> Maybe String
+formatAvgPerItem total n
+  | n <= 0    = Nothing
+  | otherwise =
+      let secs = realToFrac (nominalDiffTimeToSeconds total) / fromIntegral n :: Double
+      in Just $
+         if secs >= 60
+           then let (m, s) = round secs `divMod` (60 :: Int)
+                in show m <> ":" <> pad2 s
+           else showFFloat (Just 1) (max 0 secs) "s"
+
+-- | Charge the time since the last sample to the item that was on screen
+-- while it passed, and move the sample point to @now@. 'Nothing' (no current
+-- question, i.e. the session is over) drops the interval rather than
+-- misattributing Done-screen time to the last item answered.
+chargeTime :: Maybe Api.SubjectId -> UTCTime -> AppState -> AppState
+chargeTime msid now st =
+  let dt  = max 0 (diffUTCTime now (stLastSample st))
+      st' = st { stLastSample = now }
+  in case msid of
+       Nothing  -> st'
+       Just sid -> st' { stSubjTime = M.insertWith (+) sid dt (stSubjTime st') }
+
+-- | Stop the session timer once the queue has run out. Idempotent: the first
+-- instant recorded is the one that sticks.
+freezeClock :: UTCTime -> AppState -> AppState
+freezeClock now st
+  | null (stQueue st), Nothing <- stSessionEnd st = st { stSessionEnd = Just now }
+  | otherwise                                     = st
+
+-- | Time charged to each subject the session actually got to, newest totals
+-- as of the last key event.
+subjectTime :: AppState -> Api.SubjectId -> NominalDiffTime
+subjectTime st sid = M.findWithDefault 0 sid (stSubjTime st)

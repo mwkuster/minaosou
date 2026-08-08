@@ -21,7 +21,7 @@ import Data.Maybe (mapMaybe, fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.List (intercalate, sortOn, elemIndex)
-import Data.Time (utcToLocalTime)
+import Data.Time (NominalDiffTime, utcToLocalTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 
 theMap :: AttrMap
@@ -34,17 +34,38 @@ theMap = attrMap V.defAttr
   , (attrName "hint",    V.defAttr `V.withStyle` V.dim)
   , (attrName "bigchar", V.defAttr `V.withStyle` V.bold `V.withForeColor` V.brightYellow)
   , (attrName "input",   V.defAttr `V.withForeColor` V.brightWhite)
+  , (attrName "timer",   V.defAttr `V.withStyle` V.dim)
   ]
+
+-- Widths of the two panes; 'sessionWidth' is the total the session UI
+-- occupies, which the timer row is right-aligned within.
+queueWidth, mainWidth, sessionWidth :: Int
+queueWidth   = 28
+mainWidth    = 80
+sessionWidth = queueWidth + 1 + 1 + mainWidth   -- panes + vBorder + gap
 
 drawUi :: AppState -> [Widget Name]
 drawUi st =
   [ C.center $
-      hBox
-        [ hLimit 28 $ drawQueue st
-        , B.vBorder
-        , padLeft (Pad 1) $ hLimit 80 $ drawMain st
-        ]
+      hLimit sessionWidth $
+        vBox
+          [ drawSessionTimer st
+          , hBox
+              [ hLimit queueWidth $ drawQueue st
+              , B.vBorder
+              , padLeft (Pad 1) $ hLimit mainWidth $ drawMain st
+              ]
+          ]
   ]
+
+-- | Elapsed session time, in the top-right corner above the panes. Drawn as
+-- part of the layout rather than as an overlaying layer: a layer positioned
+-- over the corner covers the box border underneath it.
+drawSessionTimer :: AppState -> Widget Name
+drawSessionTimer st =
+  padLeft Max $
+    withAttr (attrName "timer") $
+      str (elapsedLabel st)
 
 drawQueue :: AppState -> Widget Name
 drawQueue st =
@@ -120,6 +141,9 @@ drawMain st
                    , str ("overridden:  " <> show (stOverridden st))
                    , str ("submissions: " <> show (length (mkSubmissions st)))
                    ]
+                -- No "session:" line: the corner timer stops at the last
+                -- answer, so it is already showing the session total here.
+                ++ [ str ("avg/item:    " <> avg) | Just avg <- [sessionAvgPerItem st] ]
                 ++ breakdownWidgets
                 ++ confirmWidgets
                 ++ detailWidgets
@@ -433,6 +457,12 @@ drawReviewSchedule st =
 -- | Session-end breakdown: for each reviewed subject, whether it was
 -- answered with zero mistakes ("clean") or missed at least once, grouped by
 -- subject type and by (pre-review) SRS stage.
+-- | Mean time per item over the whole session, or 'Nothing' before any item
+-- has been answered.
+sessionAvgPerItem :: AppState -> Maybe String
+sessionAvgPerItem st =
+  formatAvgPerItem (sum (M.elems (stSubjTime st))) (M.size (stSubjTime st))
+
 drawBreakdown :: AppState -> [Widget Name]
 drawBreakdown st =
   case perSubject of
@@ -443,16 +473,21 @@ drawBreakdown st =
        ++ map row (sortByOrder stageOrder byStage)
   where
     perSubject =
-      [ (subj, missed)
+      [ (subj, missed, subjectTime st sid)
       | (sid, p) <- M.toList (stProgress st)
       , Just subj <- [M.lookup sid (stAllSubjects st)]
       , let missed = pMeaningWrong p > 0 || pReadingWrong p > 0
       ]
 
-    tally :: (Api.Subject -> Text) -> [(Text, (Int, Int))]
-    tally keyFn = M.toList $ M.fromListWith addPair
-      [ (keyFn subj, if missed then (0, 1) else (1, 0)) | (subj, missed) <- perSubject ]
-    addPair (c1, m1) (c2, m2) = (c1 + c2, m1 + m2)
+    -- Clean / missed / time / how many of them the session actually spent
+    -- time on: an abandoned session leaves untouched subjects in the tally,
+    -- and averaging over those would understate the time per item.
+    tally :: (Api.Subject -> Text) -> [(Text, (Int, Int, NominalDiffTime, Int))]
+    tally keyFn = M.toList $ M.fromListWith addTally
+      [ (keyFn subj, if missed then (0, 1, t, timed) else (1, 0, t, timed))
+      | (subj, missed, t) <- perSubject
+      , let timed = if t > 0 then 1 else 0 ]
+    addTally (c1, m1, t1, n1) (c2, m2, t2, n2) = (c1 + c2, m1 + m2, t1 + t2, n1 + n2)
 
     byType  = tally (subjTypeLabel . Api.subjType)
     byStage = tally stageOf
@@ -468,9 +503,11 @@ drawBreakdown st =
 
     sortByOrder order = sortOn (\(label, _) -> fromMaybe maxBound (elemIndex label order))
 
-    row (label, (clean, missed)) =
+    row (label, (clean, missed, total, timed)) =
       str (strPadRight 16 (T.unpack label)
-        <> "clean: " <> show clean <> "  missed: " <> show missed)
+        <> strPadRight 10 ("clean: "  <> show clean)
+        <> strPadRight 11 ("missed: " <> show missed)
+        <> maybe "" ("avg: " <>) (formatAvgPerItem total timed))
 
 subjTypeLabel :: Api.SubjectType -> Text
 subjTypeLabel Api.Radical        = "Radical"
