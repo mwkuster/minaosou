@@ -1,5 +1,10 @@
 # Revision history for minaosou
 
+## 1.1.0 -- unreleased
+
+* **Session timer.** The top-right corner counts up from the start of a study session (`MM:SS`, `H:MM:SS` past the hour) and stops when the last item is answered, so what it shows afterwards is how long the reviews took.
+* **Time per item.** The end-of-session breakdown reports the average time spent per item overall, and per row in the by-type and by-SRS-stage tables. An item's time covers both its questions, any wrong-answer screens and overlays, and each requeued retry.
+
 ## 1.0.0 -- 2026-07-30
 
 * **Renamed: `kroki` → `minaosou`.** The command, package, repository, and config directory are all now `minaosou` (見直そう, "let's review"). The old name collided with the well-known [kroki.io](https://kroki.io) diagram tool; this is otherwise the same application.
