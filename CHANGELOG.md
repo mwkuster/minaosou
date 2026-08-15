@@ -1,10 +1,10 @@
 # Revision history for minaosou
 
-## 1.1.0 -- unreleased
+## 1.1.0 -- 2026-08-15
 
 * **Session timer.** The top-right corner counts up from the start of a study session (`MM:SS`, `H:MM:SS` past the hour) and stops when the last item is answered, so what it shows afterwards is how long the reviews took.
-* **Radical composition in the all-info overlay.** For a vocabulary item, each component kanji now lists the radicals it is built from — glyph and name — underneath its readings, so Ctrl-a shows the whole chain radical → kanji → vocabulary in one place.
 * **Time per item.** The end-of-session breakdown reports the average time spent per item overall, and per row in the by-type and by-SRS-stage tables. An item's time covers both its questions, any wrong-answer screens and overlays, and each requeued retry.
+* **Radical composition in the all-info overlay.** For a vocabulary item, each component kanji now lists the radicals it is built from — glyph and name — underneath its readings, so Ctrl-a shows the whole chain radical → kanji → vocabulary in one place.
 
 ## 1.0.0 -- 2026-07-30
 
