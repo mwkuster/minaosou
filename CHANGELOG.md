@@ -1,5 +1,9 @@
 # Revision history for minaosou
 
+## 1.1.1 -- unreleased
+
+* **`minaosou --version`.** Reports the version the binary was built from, so a downloaded release can be told apart from a local build.
+
 ## 1.1.0 -- 2026-08-15
 
 * **Session timer.** The top-right corner counts up from the start of a study session (`MM:SS`, `H:MM:SS` past the hour) and stops when the last item is answered, so what it shows afterwards is how long the reviews took.

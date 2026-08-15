@@ -7,6 +7,8 @@ module Cli
   ) where
 
 import Options.Applicative
+import Data.Version (showVersion)
+import Paths_minaosou (version)
 
 data StudyOpts = StudyOpts
   { studyBatchSize    :: Maybe Int
@@ -41,10 +43,16 @@ cliPrefs = prefs helpShowGlobals
 parserInfo :: ParserInfo Options
 parserInfo =
   info
-    (optionsParser <**> helper)
+    (optionsParser <**> helper <**> versioner)
     ( fullDesc
    <> progDesc "minaosou: tiny WaniKani CLI"
    <> header "minaosou" )
+
+-- | @--version@, reporting the version cabal built this binary from
+-- ('Paths_minaosou'), so a release binary can be told from a local build
+-- without guessing.
+versioner :: Parser (a -> a)
+versioner = simpleVersioner ("minaosou " <> showVersion version)
 
 optionsParser :: Parser Options
 optionsParser =
