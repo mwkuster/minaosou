@@ -356,22 +356,39 @@ drawAllInfo q st =
       ++ [ str ("Missed before: " <> l) | Just l <- [missedLine] ]
       ++ [ str "" ]
 
-    showKanjiReadings c =
+    -- A component kanji is expanded (readings, radical composition) only
+    -- when the subject on screen is a vocabulary item; for a kanji subject
+    -- the components already /are/ its radicals, which need no breakdown.
+    expandKanji c =
       Api.subjType c == Api.Kanji
       && (Api.subjType subj == Api.Vocabulary || Api.subjType subj == Api.KanaVocabulary)
-      && not (null (Api.subjReadings c))
+
+    showKanjiReadings c = expandKanji c && not (null (Api.subjReadings c))
+
+    -- The radicals a component kanji is built from, as "glyph name". A few
+    -- WaniKani radicals are image-only (no characters at all) -- those show
+    -- the name on its own rather than a placeholder.
+    kanjiRadicals c
+      | not (expandKanji c) = []
+      | otherwise =
+          [ maybe m (<> " " <> m) (Api.subjChars r)
+          | r <- lookupSubjects st (Api.subjComponentIds c)
+          , Api.subjType r == Api.Radical
+          , m <- take 1 (Api.subjMeanings r)
+          ]
 
     renderComponent c =
       let chars   = T.unpack (fromMaybe "?" (Api.subjChars c))
           meanings = T.unpack (T.intercalate ", " (Api.subjMeanings c))
           headerW  = str ("  " <> chars <> "  " <> meanings)
-      in if showKanjiReadings c
-           then [ headerW
-                , withAttr (attrName "hint") $
-                    str ("       readings: "
-                      <> T.unpack (T.intercalate ", " (Api.subjReadings c)))
-                ]
-           else [ headerW ]
+          detail label vals =
+            [ withAttr (attrName "hint") $
+                wideTxtWrap ("       " <> label <> ": " <> T.intercalate ", " vals)
+            | not (null vals)
+            ]
+      in [ headerW ]
+         ++ detail "readings" [ r | showKanjiReadings c, r <- Api.subjReadings c ]
+         ++ detail "radicals" (kanjiRadicals c)
 
     compSection =
       let comps = lookupSubjects st (Api.subjComponentIds subj)

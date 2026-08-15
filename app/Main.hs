@@ -411,8 +411,9 @@ submitSynonymWith :: String -> Api.SubjectId -> Maybe Api.StudyMaterialId -> [T.
 submitSynonymWith t sid mSmId synonyms = Api.putMeaningSynonyms t mSmId sid synonyms
 
 -- | Fetch the extra subjects referenced by a batch of subjects being
--- studied -- component kanji/radicals, vocabulary that uses a kanji, and
--- visually-similar kanji -- and build a lookup map covering both the batch
+-- studied -- component kanji/radicals, the radicals of those component
+-- kanji, vocabulary that uses a kanji, and visually-similar kanji -- and
+-- build a lookup map covering both the batch
 -- itself and everything referenced from it. Used to render the Ctrl-a
 -- overlay and wrong-answer hints; shared by a normal study batch and a
 -- leech practice round, which need identical reference data.
@@ -420,6 +421,20 @@ fetchSubjectContext :: String -> M.Map Api.SubjectId Api.StudyMaterial -> [Api.S
 fetchSubjectContext t sms subjects = do
   let compIds = nub [ cid | s <- subjects, cid <- Api.subjComponentIds s ]
   compSubjects <- applyStudyMaterials sms <$> Api.getSubjectsByIds t compIds
+  -- One level deeper: the radicals each component kanji is itself built
+  -- from, so the Ctrl-a overlay can show a vocabulary's component kanji
+  -- together with their radical composition. Ids already covered by the
+  -- batch or the fetch above are dropped, so this is a small extra request
+  -- (radicals repeat heavily across kanji).
+  let known = Set.fromList (map Api.subjId (subjects ++ compSubjects))
+      subCompIds = nub
+        [ rid
+        | c <- compSubjects
+        , Api.subjType c == Api.Kanji
+        , rid <- Api.subjComponentIds c
+        , not (rid `Set.member` known)
+        ]
+  subCompSubjects <- applyStudyMaterials sms <$> Api.getSubjectsByIds t subCompIds
   let amalgIds = nub
         [ aid
         | s <- subjects
@@ -436,7 +451,7 @@ fetchSubjectContext t sms subjects = do
   simSubjects <- applyStudyMaterials sms <$> Api.getSubjectsByIds t simIds
   pure $ M.fromList
     [ (Api.subjId s, s)
-    | s <- subjects ++ compSubjects ++ amalgSubjects ++ simSubjects
+    | s <- subjects ++ compSubjects ++ subCompSubjects ++ amalgSubjects ++ simSubjects
     ]
 
 -- | 'Api.createReview', caught: shared by a fresh batch submission

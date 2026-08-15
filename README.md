@@ -23,7 +23,7 @@ A terminal client for [WaniKani](https://www.wanikani.com/) — do your kanji an
 - Current SRS stage (Apprentice / Guru / Master / Enlightened / Burned) shown in the question border
 - Romaji input converted to hiragana live as you type (`gakkou` → `がっこう`)
 - British/American spelling normalisation for meaning answers
-- Per-item level, SRS stage, mnemonics, and component breakdowns (Ctrl-a) — kanji info lists vocabulary that uses the kanji; vocabulary info shows the readings of each component kanji
+- Per-item level, SRS stage, mnemonics, and component breakdowns (Ctrl-a) — kanji info lists vocabulary that uses the kanji; vocabulary info shows the readings and radical composition of each component kanji
 - Review schedule for the next 24 hours (Ctrl-v)
 - Session timer in the top-right corner, counting up from the start of the session and stopping when the last item is answered
 - Optional pronunciation audio via an external player (Ctrl-p), with an opt-in auto-play on a reading question's first appearance (`audio_autoplay`)

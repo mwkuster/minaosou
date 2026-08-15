@@ -45,7 +45,7 @@ This is a WaniKani (kanji/vocabulary SRS) CLI+TUI app. The study flow:
 - `Enter` — submit answer
 - `Ctrl-o` — override as correct
 - `Ctrl-r` — requeue question later (no penalty)
-- `Ctrl-a` — show all info overlay (level, SRS stage, components, meanings, readings, mnemonics; for kanji subjects also lists vocabulary that uses the kanji and visually similar kanji; for vocab subjects also shows the readings of each component kanji); ↑↓/j/k to scroll, Ctrl-a/Esc/Enter to close
+- `Ctrl-a` — show all info overlay (level, SRS stage, components, meanings, readings, mnemonics; for kanji subjects also lists vocabulary that uses the kanji and visually similar kanji; for vocab subjects also shows the readings and radical composition of each component kanji); ↑↓/j/k to scroll, Ctrl-a/Esc/Enter to close
 - `Ctrl-u` — show user info overlay (username, level, profile URL)
 - `Ctrl-v` — show review schedule overlay (next 24h); ↑↓/j/k to scroll, Ctrl-v/Esc to close
 - `Ctrl-p` — play pronunciation audio (vocabulary, requires `audio_player` in config)
