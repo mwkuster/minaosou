@@ -26,6 +26,7 @@ import qualified TuiSpec
 import qualified SrsSpec
 import qualified Config
 import qualified History
+import qualified ForecastCache
 import qualified JsonStore
 import qualified Util
 import qualified Api
@@ -37,6 +38,7 @@ main = hspec $ do
   configSpec
   apiSpec
   historySpec
+  forecastCacheSpec
   utilSpec
   jsonStoreSpec
 
@@ -572,6 +574,75 @@ historySpec = describe "History" $ do
         M.singleton (Api.SubjectId 2) (3, 0)
 
 --------------------------------------------------------------------------------
+-- ForecastCache
+--------------------------------------------------------------------------------
+
+sampleTime :: UTCTime
+sampleTime = UTCTime (fromGregorian 2026 8 16) (secondsToDiffTime 0)
+
+stat :: Int -> Int -> Api.ReviewStat
+stat sid reviews = Api.ReviewStat (Api.SubjectId sid) reviews 0 0 True
+
+prog :: Int -> Int -> Api.Progress
+prog sid stage = Api.Progress (Api.SubjectId sid) stage (Just sampleTime) Nothing
+
+forecastCacheSpec :: Spec
+forecastCacheSpec = describe "ForecastCache" $ do
+
+  describe "tokenFingerprint" $ do
+    -- The published FNV-1a 64-bit test vectors. Pinning them proves the
+    -- constants in the source are the algorithm's own and not something
+    -- derived from any particular token.
+    it "matches the FNV-1a 64-bit vector for the empty string" $
+      ForecastCache.tokenFingerprint "" `shouldBe` 0xcbf29ce484222325
+
+    it "matches the FNV-1a 64-bit vector for \"a\"" $
+      ForecastCache.tokenFingerprint "a" `shouldBe` 0xaf63dc4c8601ec8c
+
+    it "matches the FNV-1a 64-bit vector for \"foobar\"" $
+      ForecastCache.tokenFingerprint "foobar" `shouldBe` 0x85944171f73967e8
+
+    it "separates two different tokens" $
+      ForecastCache.tokenFingerprint "token-a"
+        `shouldNotBe` ForecastCache.tokenFingerprint "token-b"
+
+  describe "mergeById" $ do
+    it "lets a freshly fetched record win over the cached one" $ do
+      let merged = ForecastCache.mergeById Api.rsSubjectId [stat 1 5, stat 2 9] [stat 1 7]
+      map Api.rsReviews merged `shouldBe` [7, 9]
+
+    it "keeps records the incremental fetch did not mention" $ do
+      let merged = ForecastCache.mergeById Api.rsSubjectId [stat 1 5, stat 2 9] []
+      map Api.rsReviews merged `shouldBe` [5, 9]
+
+    it "adds records that were not cached before" $ do
+      let merged = ForecastCache.mergeById Api.rsSubjectId [stat 1 5] [stat 3 2]
+      map (Api.unSubjectId . Api.rsSubjectId) merged `shouldBe` [1, 3]
+
+  describe "forToken" $ do
+    it "keeps a cache built with the same token" $ do
+      let c = (ForecastCache.emptyCache (ForecastCache.tokenFingerprint "tok"))
+                { ForecastCache.cacheStats = [stat 1 5] }
+      ForecastCache.cacheStats (ForecastCache.forToken "tok" c) `shouldBe` [stat 1 5]
+
+    it "discards a cache built with a different token" $ do
+      -- Otherwise switching accounts would report someone else's history.
+      let c = (ForecastCache.emptyCache (ForecastCache.tokenFingerprint "other"))
+                { ForecastCache.cacheStats = [stat 1 5] }
+      ForecastCache.cacheStats (ForecastCache.forToken "tok" c) `shouldBe` []
+
+  describe "JSON round-trip" $
+    it "preserves records and both watermarks" $ do
+      let c = ForecastCache.Cache
+                { ForecastCache.cacheToken    = ForecastCache.tokenFingerprint "tok"
+                , ForecastCache.cacheStats    = [stat 1 5, stat 2 9]
+                , ForecastCache.cacheStatsAt  = Just sampleTime
+                , ForecastCache.cacheProgress = [prog 1 4, prog 2 8]
+                , ForecastCache.cacheProgAt   = Just sampleTime
+                }
+      decode (encode c) `shouldBe` Just c
+
+--------------------------------------------------------------------------------
 -- Util
 --------------------------------------------------------------------------------
 
@@ -618,6 +689,32 @@ utilSpec = describe "Util" $ do
           (statusCodeException 422 "Unprocessable Entity" "")))
         `shouldBe` "HTTP 422 Unprocessable Entity"
 
+  describe "isRateLimit" $ do
+    it "recognises a 429" $
+      Util.isRateLimit
+        (toException (HC.HttpExceptionRequest HC.defaultRequest
+          (statusCodeException 429 "Too Many Requests" "slow down")))
+        `shouldBe` True
+
+    it "sees through req's VanillaHttpException wrapper" $
+      Util.isRateLimit
+        (toException (Req.VanillaHttpException
+          (HC.HttpExceptionRequest HC.defaultRequest
+            (statusCodeException 429 "Too Many Requests" ""))))
+        `shouldBe` True
+
+    it "does not mistake a 422 rejection for a rate limit" $
+      Util.isRateLimit
+        (toException (HC.HttpExceptionRequest HC.defaultRequest
+          (statusCodeException 422 "Unprocessable Entity" "")))
+        `shouldBe` False
+
+    it "does not mistake a dropped connection for a rate limit" $
+      Util.isRateLimit
+        (toException (HC.HttpExceptionRequest HC.defaultRequest HC.ConnectionTimeout))
+        `shouldBe` False
+
+  describe "shortErr, continued" $ do
     it "describes an invalid URL" $
       Util.shortErr (toException (HC.InvalidUrlException "htp://x" "unknown scheme"))
         `shouldBe` "invalid URL htp://x: unknown scheme"

@@ -24,6 +24,7 @@ data ForecastOpts = ForecastOpts
   { forecastLessons       :: Maybe Int
   , forecastDays          :: Int
   , forecastReviewsPerDay :: Maybe Int
+  , forecastRefresh       :: Bool
   } deriving (Show, Eq)
 
 data Command
@@ -136,6 +137,9 @@ forecastParser =
                 ( long "reviews-per-day"
                <> metavar "N"
                <> help "A daily review budget to solve for: report the lesson pace and the accuracy that would keep the load at N" ) )
+      <*> switch
+            ( long "refresh"
+           <> help "Re-read your whole history from WaniKani instead of updating the local copy" )
 
 leechesParser :: Parser Command
 leechesParser =

@@ -45,6 +45,7 @@ module Api
   , createReview
   ) where
 
+import Control.Applicative ((<|>))
 import Data.Aeson (FromJSON(..), ToJSON(..), Object, object, withObject, (.:), (.:?), (.!=), (.=))
 import Data.Aeson.Types (Parser)
 import qualified Data.Aeson.Key as Key
@@ -378,16 +379,21 @@ data AssignmentData = AssignmentData
 -- one page's worth of results (e.g. >500 overdue reviews) would silently
 -- return only the first page with no indication anything was cut off.
 data PagedEnvelope a = PagedEnvelope
-  { peData    :: [a]
-  , peNextUrl :: Maybe Text
+  { peData          :: [a]
+  , peNextUrl       :: Maybe Text
+  , peDataUpdatedAt :: Maybe UTCTime
+    -- ^ The most recent update among the records in this collection.
+    -- Feeding it back as @updated_after@ on the next run is WaniKani's
+    -- documented way to ask only for what has changed since.
   } deriving (Show)
 
 instance FromJSON a => FromJSON (PagedEnvelope a) where
   parseJSON = withObject "PagedEnvelope" $ \o -> do
-    d     <- o .: "data"
-    pages <- o .:? "pages"
-    next  <- maybe (pure Nothing) (.: "next_url") pages
-    pure (PagedEnvelope d next)
+    d       <- o .: "data"
+    pages   <- o .:? "pages"
+    next    <- maybe (pure Nothing) (.: "next_url") pages
+    updated <- o .:? "data_updated_at"
+    pure (PagedEnvelope d next (updated >>= iso8601ParseM))
 
 instance FromJSON AssignmentData where
   parseJSON = withObject "AssignmentData" $ \o -> do
@@ -599,35 +605,51 @@ instance FromJSON Progress where
     burned  <- d .:? "burned_at"
     pure (Progress sid stage (started >>= iso8601ParseM) (burned >>= iso8601ParseM))
 
--- | Every review statistic the account has, one record per subject ever
--- reviewed.
-getReviewStatistics :: String -> (Int -> IO ()) -> IO [ReviewStat]
+-- | Review statistics, one record per subject ever reviewed. With a
+-- watermark, only the records that changed since it.
+getReviewStatistics
+  :: String -> Maybe UTCTime -> (Int -> IO ()) -> IO ([ReviewStat], Maybe UTCTime)
 getReviewStatistics token =
   collectAll token (https "api.wanikani.com" /: "v2" /: "review_statistics") mempty
 
--- | Every assignment the account has, hidden subjects excluded (WaniKani
--- retires the occasional item; its history should not weigh on a forecast).
-getProgress :: String -> (Int -> IO ()) -> IO [Progress]
+-- | Assignments, hidden subjects excluded (WaniKani retires the occasional
+-- item; its history should not weigh on a forecast). With a watermark, only
+-- the ones that changed since it.
+getProgress
+  :: String -> Maybe UTCTime -> (Int -> IO ()) -> IO ([Progress], Maybe UTCTime)
 getProgress token =
   collectAll token (https "api.wanikani.com" /: "v2" /: "assignments") ("hidden" =: False)
 
 -- | Follow a collection to its last page, reporting the running total as it
--- goes. These are the only calls in minaosou whose cost grows with how long
--- the user has been studying -- an established account runs to a dozen-odd
--- pages each -- so they should not sit silent behind the rate limiter.
+-- goes, and return the watermark to resume from next time.
+--
+-- These are the only calls in minaosou whose cost grows with how long the
+-- user has been studying: a full sweep of an established account is a
+-- dozen-odd pages /per endpoint/, enough that a few runs in quick succession
+-- would breach WaniKani's 60-requests-per-minute budget on their own. Hence
+-- both the progress reporting and the @updated_after@ watermark -- a repeat
+-- run should cost a request or two, not thirty.
 collectAll
   :: FromJSON a
-  => String -> Url 'Https -> Option 'Https -> (Int -> IO ()) -> IO [a]
-collectAll token endpoint params progress = do
+  => String -> Url 'Https -> Option 'Https
+  -> Maybe UTCTime -> (Int -> IO ()) -> IO ([a], Maybe UTCTime)
+collectAll token endpoint params since progress = do
   firstPage <- runApi $ do
-    resp <- req GET endpoint NoReqBody jsonResponse (params <> apiOpts token)
+    resp <- req GET endpoint NoReqBody jsonResponse
+              (params <> sinceParam <> apiOpts token)
     pure (responseBody resp)
   go [peData firstPage] (length (peData firstPage)) firstPage
   where
+    sinceParam =
+      maybe mempty (\t -> "updated_after" =: T.pack (iso8601Show t)) since
+
     go chunks n page = do
       progress n
       case peNextUrl page of
-        Nothing  -> pure (concat (reverse chunks))
+        -- An incremental fetch that matched nothing reports no watermark of
+        -- its own; keep the one we asked from rather than resetting to a
+        -- full sweep next time.
+        Nothing  -> pure (concat (reverse chunks), peDataUpdatedAt page <|> since)
         Just url -> do
           next <- fetchPage token url
           go (peData next : chunks) (n + length (peData next)) next

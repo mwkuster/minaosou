@@ -3,6 +3,7 @@
 ## 1.2.0 -- unreleased
 
 * **`minaosou forecast`.** Projects the daily review load your lesson pace settles at, from what your own account has actually cost. It measures the reviews your burned items really took (the SRS ladder as you have walked it, not as a table says it should go), fits a per-review miss rate to that, and reports the resulting reviews/day, time from lesson to burned, and items in circulation -- next to what your account holds today, so you can see which way the load is drifting. `--reviews-per-day N` solves the question backwards: the lesson pace, or the accuracy, that would hold the load at N. Stage intervals come from WaniKani's `spaced_repetition_systems` endpoint rather than being hard-coded.
+* **`forecast` caches your history locally.** A full sweep is ~29 requests against WaniKani's 60-per-minute budget, so running it three times in a minute used to fail with a rate-limit error (the in-process limiter cannot see what an earlier run already spent). Runs now carry WaniKani's `data_updated_at` watermark and ask only for what changed since, which takes a repeat run from ~29 requests and 7 seconds down to 3 and about one. `--refresh` forces a full re-read. A rate limit that does happen is now reported as such, instead of dumping a raw HTTP exception.
 
 ## 1.1.1 -- unreleased
 

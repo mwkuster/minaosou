@@ -3,11 +3,12 @@ module Main (main) where
 import qualified Cli
 import qualified Api
 import qualified Config
+import qualified ForecastCache
 import qualified History
 import qualified PendingReviews
 import qualified Srs
 import qualified Tui
-import Util (groupDigits, median, shortErr, strPadLeft, strPadRight, trySync)
+import Util (groupDigits, isRateLimit, median, shortErr, strPadLeft, strPadRight, trySync)
 
 import Control.Applicative ((<|>))
 import Control.Concurrent.Async (mapConcurrently)
@@ -413,15 +414,78 @@ main = do
 -- asked from either end.
 runForecast :: String -> Cli.ForecastOpts -> IO ()
 runForecast t opts = do
+  let fingerprint = ForecastCache.tokenFingerprint t
+  cached <-
+    if Cli.forecastRefresh opts
+      then pure (ForecastCache.emptyCache fingerprint)
+      else ForecastCache.forToken t <$> ForecastCache.loadCache fingerprint
+
+  fetched <- trySync (fetchForecastData t cached)
+  case fetched of
+    Left e -> die (forecastFetchError e)
+    Right (Nothing, _) ->
+      die "WaniKani reported no spaced repetition system, so there is nothing to project against."
+    Right (Just sys, cache) -> do
+      ForecastCache.saveCache cache
+      now <- getCurrentTime
+      reportForecast opts sys now
+        (ForecastCache.cacheProgress cache) (ForecastCache.cacheStats cache)
+
+-- | Bring the cached collections up to date and return them.
+--
+-- Both fetches carry the watermark from the previous run, so a repeat costs
+-- a request or two instead of a full sweep -- see "ForecastCache" for why
+-- that matters rather than merely being tidy.
+fetchForecastData
+  :: String -> ForecastCache.Cache -> IO (Maybe Api.SrsSystem, ForecastCache.Cache)
+fetchForecastData t cached = do
   mSys <- Api.getSrsSystem t
-  sys  <- maybe (die "WaniKani reported no spaced repetition system, so there is nothing to project against.") pure mSys
 
-  stats <- Api.getReviewStatistics t (fetchProgress "answer record")
+  (freshStats, statsAt) <-
+    Api.getReviewStatistics t (ForecastCache.cacheStatsAt cached)
+      (fetchProgress (isJust (ForecastCache.cacheStatsAt cached)) "answer record")
   hPutStrLn stderr ""
-  prog  <- Api.getProgress t (fetchProgress "item progress")
-  hPutStrLn stderr ""
-  now <- getCurrentTime
 
+  (freshProg, progAt) <-
+    Api.getProgress t (ForecastCache.cacheProgAt cached)
+      (fetchProgress (isJust (ForecastCache.cacheProgAt cached)) "item progress")
+  hPutStrLn stderr ""
+
+  pure
+    ( mSys
+    , cached
+        { ForecastCache.cacheStats =
+            ForecastCache.mergeById Api.rsSubjectId (ForecastCache.cacheStats cached) freshStats
+        , ForecastCache.cacheStatsAt = statsAt
+        , ForecastCache.cacheProgress =
+            ForecastCache.mergeById Api.pgSubjectId (ForecastCache.cacheProgress cached) freshProg
+        , ForecastCache.cacheProgAt = progAt
+        }
+    )
+  where
+    fetchProgress incremental what n = do
+      hPutStr stderr $
+        "\r" <> (if incremental then "Checking your " else "Reading your ")
+        <> what <> "… " <> groupDigits n
+        <> (if incremental then " changed" else " records") <> "   "
+      hFlush stderr
+
+-- | A 429 here is not a passing blip: WaniKani's budget is 60 requests per
+-- minute per account, and the limiter in "Api" is per process, so it cannot
+-- see what an earlier run already spent. Say so, and say that the next run
+-- will be cheap, rather than printing a bare HTTP error.
+forecastFetchError :: SomeException -> String
+forecastFetchError e
+  | isRateLimit e =
+      "WaniKani rate limit reached (60 requests per minute, per account).\n\
+      \Wait a minute and run this again -- whatever was fetched is cached, so\n\
+      \the next run asks only for what has changed since."
+  | otherwise = "Could not read your history from WaniKani: " <> shortErr e
+
+reportForecast
+  :: Cli.ForecastOpts -> Api.SrsSystem -> UTCTime
+  -> [Api.Progress] -> [Api.ReviewStat] -> IO ()
+reportForecast opts sys now prog stats = do
   let burned  = Srs.burnedCohort prog stats
       studied = Srs.cohortBy (isJust . Api.pgStartedAt) prog stats
       lo      = Api.srsStartingStage sys
@@ -533,10 +597,6 @@ runForecast t opts = do
                 "no miss rate reaches it at " <> fmtPace lessons
                 <> " lessons/day -- even a flawless run costs "
                 <> fmt0 (lessons * fromIntegral (hi - lo + 1)) <> " reviews/day"
-  where
-    fetchProgress what n = do
-      hPutStr stderr ("\rReading your " <> what <> "… " <> groupDigits n <> " records   ")
-      hFlush stderr
 
 -- | Expected days an item spends below the passing stage -- the Apprentice
 -- churn. Those stages come back within hours, so they dominate what a day

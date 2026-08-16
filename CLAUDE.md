@@ -39,6 +39,7 @@ This is a WaniKani (kanji/vocabulary SRS) CLI+TUI app. The study flow:
 - **`Api.hs`** — WaniKani REST API client (`req` library). Fetches users, summaries, assignments, subjects; submits reviews. Subjects are batch-fetched in chunks of 100.
 - **`Cli.hs`** — `optparse-applicative` command/option definitions (`WhoAmI`, `Reviews`, `Study`, `Leeches`, `Forecast`, `Init`).
 - **`Config.hs`** — Simple key=value config file parser for `~/.config/minaosou/config`.
+- **`ForecastCache.hs`** — Local cache of the two bulk collections `forecast` reads, with `updated_after` incremental refresh. See "Forecasting" below.
 - **`Srs.hs`** — Pure workload model behind `minaosou forecast`: the SRS ladder as an absorbing Markov chain. See "Forecasting" below.
 - **`Romaji.hs`** — Romaji→hiragana converter (longest-match-first lookup table). Handles consonant doubling, palatalized sounds, etc. Used by `Tui.normReading`.
 - **`Tui.hs`** — `brick`-based interactive study session. Manages a queue of questions (`QMeaning`/`QReading`), tracks per-subject progress, and produces `Submission` records. Modes: Normal → WrongAnswer → Feedback → ConfirmSubmit → Finished.
@@ -72,6 +73,8 @@ Inputs are the user's own, in this order of preference:
 3. **Miss rate** — `Srs.fitUniformFailure` bisects for the uniform per-review rate that reproduces that measured cost. It is *not* read off the answer counts, which can only bracket it (`itemFailureBracket`) since WaniKani records misses per question, never per review.
 
 **`/v2/reviews` returns an empty collection** — WaniKani no longer serves historical review records there (the POST used for submitting still works). That killed the obvious design, a per-stage failure profile from `starting_srs_stage`. `/v2/review_statistics` has only lifetime totals per subject, so a uniform rate is the most the data supports. Don't reach for per-stage rates again without checking that endpoint first.
+
+**Request cost and the cache.** A full sweep is ~29 requests (1 SRS + ~14 pages review_statistics + ~14 pages assignments) against WaniKani's **60/minute per-account** budget. `Api.sentRequests` is a **process-global** MVar, so the sliding-window limiter resets on every invocation and cannot see what a previous `minaosou` process spent — three `forecast` runs in a minute reproducibly returned 429. Fixed by `ForecastCache`: both collections are stored in `~/.config/minaosou/forecast_cache.json` and refetched with WaniKani's `data_updated_at` fed back as `updated_after`, so a repeat run costs 3 requests. `--refresh` forces a full sweep. Verified: cached output is byte-identical to `--refresh` output. If you add another bulk endpoint to this command, cache it the same way.
 
 The wrong-answer penalty (1 stage below passing, 2 from passing up) is the one thing the API does not expose, so `uniformModel` writes it down. It only fixes the exchange rate between miss rate and review count, and since the rate is *fitted* to the observed count, an error there is largely absorbed by the fit.
 

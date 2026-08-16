@@ -7,6 +7,7 @@ module Util
   , groupDigits
   , median
   , shortErr
+  , isRateLimit
   , trySync
   , displayWidth
   , wrapTextWidth
@@ -113,6 +114,24 @@ describe e
   | Just (Req.JsonHttpException msg)   <- fromException e = "malformed JSON in response: " <> msg
   | Just hc                            <- fromException e = describeHttp hc
   | otherwise                                             = displayException e
+
+-- | Whether an exception is WaniKani refusing the request because the
+-- account's request budget is spent (HTTP 429), as opposed to anything the
+-- caller could fix by trying harder. Worth telling apart, because the useful
+-- advice is "wait a minute", not "check your token".
+isRateLimit :: SomeException -> Bool
+isRateLimit e = case httpContent e of
+  Just (HC.StatusCodeException resp _) -> statusCode (HC.responseStatus resp) == 429
+  _                                    -> False
+
+httpContent :: SomeException -> Maybe HC.HttpExceptionContent
+httpContent e
+  | Just (Req.VanillaHttpException hc) <- fromException e = fromHttp hc
+  | Just hc                            <- fromException e = fromHttp hc
+  | otherwise                                             = Nothing
+  where
+    fromHttp (HC.HttpExceptionRequest _ c) = Just c
+    fromHttp _                             = Nothing
 
 describeHttp :: HC.HttpException -> String
 describeHttp (HC.InvalidUrlException url reason) = "invalid URL " <> url <> ": " <> reason

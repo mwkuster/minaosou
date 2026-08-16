@@ -155,6 +155,8 @@ To hold 100 reviews/day instead, either
 
 `--lessons N` projects a pace you are considering rather than your measured one, and `--days N` sets the window that measured pace is taken over (default 90).
 
+Your history is cached in `~/.config/minaosou/forecast_cache.json`, so only the first run reads it in full (~29 API requests); later runs ask WaniKani for what has changed since and typically cost three. This matters because WaniKani allows 60 requests per minute per account, which a few full sweeps would exhaust. `--refresh` re-reads everything from scratch. The cache holds no credentials — just a fingerprint of your token, so that pointing minaosou at a different account discards it rather than reporting the wrong history.
+
 Two caveats the command states itself: burned items were learned at earlier levels, so they are the easier half of your history and the projection errs optimistic; and WaniKani records misses per question, never per review, so the item-level miss rate is bracketed rather than known exactly — the fitted rate is the one consistent with what your items actually cost.
 
 ### Leech tracking
