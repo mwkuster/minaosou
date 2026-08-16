@@ -153,7 +153,7 @@ To hold 100 reviews/day instead, either
   · a miss rate of 8.4% (from 23.3%), keeping 10 lessons/day
 ```
 
-`--lessons N` projects a pace you are considering rather than your measured one, and `--days N` sets the window that measured pace is taken over (default 90).
+`--lessons N` projects a pace you are considering rather than your measured one, and `--days N` sets the window that measured pace is taken over (default 30). The window matters: a long one averages across any stretch where you were not doing lessons, and reports a pace you are no longer on.
 
 Your history is cached in `~/.config/minaosou/forecast_cache.json`, so only the first run reads it in full (~29 API requests); later runs ask WaniKani for what has changed since and typically cost three. This matters because WaniKani allows 60 requests per minute per account, which a few full sweeps would exhaust. `--refresh` re-reads everything from scratch. The cache holds no credentials — just a fingerprint of your token, so that pointing minaosou at a different account discards it rather than reporting the wrong history.
 

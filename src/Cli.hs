@@ -129,7 +129,7 @@ forecastParser =
       <*> option auto
             ( long "days"
            <> metavar "N"
-           <> value 90
+           <> value 30
            <> showDefault
            <> help "Window over which to measure your recent lesson pace" )
       <*> optional
