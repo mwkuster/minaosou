@@ -4,6 +4,8 @@
 module Util
   ( strPadLeft
   , strPadRight
+  , groupDigits
+  , median
   , shortErr
   , trySync
   , displayWidth
@@ -19,6 +21,7 @@ import Control.Exception
   , try
   )
 import qualified Data.ByteString.Char8 as BS8
+import Data.List (intercalate)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Graphics.Text.Width (safeWcwidth)
@@ -33,6 +36,28 @@ strPadLeft n s = replicate (max 0 (n - length s)) ' ' <> s
 -- | Pad a String on the right with spaces to at least n characters (left-aligns text).
 strPadRight :: Int -> String -> String
 strPadRight n s = s <> replicate (max 0 (n - length s)) ' '
+
+-- | Thousands separators, so a five- or six-figure review count can be read
+-- at a glance rather than counted digit by digit.
+groupDigits :: Int -> String
+groupDigits n
+  | n < 0     = '-' : groupDigits (negate n)
+  | otherwise = reverse (intercalate "," (chunksOf3 (reverse (show n))))
+  where
+    chunksOf3 [] = []
+    chunksOf3 s  = let (a, b) = splitAt 3 s in a : chunksOf3 b
+
+-- | Median of an already-sorted list, averaging the middle pair when the
+-- count is even. 'Nothing' for an empty one, since there is no sensible
+-- answer to report and a zero would read as a real measurement.
+median :: [Double] -> Maybe Double
+median [] = Nothing
+median xs
+  | odd n     = Just (xs !! mid)
+  | otherwise = Just ((xs !! (mid - 1) + xs !! mid) / 2)
+  where
+    n   = length xs
+    mid = n `div` 2
 
 -- | Terminal display width of text: East-Asian wide characters (kanji, kana)
 -- count as 2 cells, control characters as 0 -- matching how vty actually

@@ -3,6 +3,7 @@ module Cli
   , Command(..)
   , StudyOpts(..)
   , LeechesOpts(..)
+  , ForecastOpts(..)
   , parseCli
   ) where
 
@@ -19,11 +20,18 @@ newtype LeechesOpts = LeechesOpts
   { leechesStudy :: Bool
   } deriving (Show, Eq)
 
+data ForecastOpts = ForecastOpts
+  { forecastLessons       :: Maybe Int
+  , forecastDays          :: Int
+  , forecastReviewsPerDay :: Maybe Int
+  } deriving (Show, Eq)
+
 data Command
   = WhoAmI
   | Reviews
   | Study StudyOpts
   | Leeches LeechesOpts
+  | Forecast ForecastOpts
   | Init
   deriving (Show, Eq)
 
@@ -94,6 +102,8 @@ commandParser =
          (info studyParser   (progDesc "Start a review batch (max N items)"))
     <> command "leeches"
          (info leechesParser (progDesc "List subjects tracked as leeches (repeated wrong answers across sessions)"))
+    <> command "forecast"
+         (info forecastParser (progDesc "Project the daily review load your lesson pace and accuracy lead to"))
     <> command "init"
          (info (pure Init)   (progDesc "Create or overwrite ~/.config/minaosou/config interactively"))
     )
@@ -105,6 +115,27 @@ studyParser =
     StudyOpts
       <$> optional batchSizeOption
       <*> optional requeueAfterOption
+
+forecastParser :: Parser Command
+forecastParser =
+  fmap Forecast $
+    ForecastOpts
+      <$> optional
+            ( option auto
+                ( long "lessons"
+               <> metavar "N"
+               <> help "Lessons per day to project for (default: your own measured pace)" ) )
+      <*> option auto
+            ( long "days"
+           <> metavar "N"
+           <> value 90
+           <> showDefault
+           <> help "Window over which to measure your recent lesson pace" )
+      <*> optional
+            ( option auto
+                ( long "reviews-per-day"
+               <> metavar "N"
+               <> help "A daily review budget to solve for: report the lesson pace and the accuracy that would keep the load at N" ) )
 
 leechesParser :: Parser Command
 leechesParser =

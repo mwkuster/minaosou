@@ -31,6 +31,7 @@ A terminal client for [WaniKani](https://www.wanikani.com/) — do your kanji an
 - Configurable batch size (0 = all available reviews)
 - Wrong-answer screen auto-surfaces the relevant mnemonic, flags visually-similar-kanji mix-ups by name, and shows the components that build the answer — component kanji and their meanings/readings for vocabulary, component radicals and their meanings for kanji; scrollable if it doesn't fit
 - End-of-session accuracy breakdown by subject type and SRS stage, each row with the average time spent per item
+- Workload forecast (`minaosou forecast`): projects the daily review load your lesson pace settles at, measured from what your own burned items actually cost, and solves it backwards for a review budget you set
 - Cross-session leech tracking (`minaosou leeches`): lists subjects you keep getting wrong across sessions, and `minaosou leeches --study` lets you drill them in a dedicated practice session that is never submitted to WaniKani
 - Colour scheme puts visual focus on the current answer rather than the queue: unselected queue items are dimmed, and the answer input is rendered at full brightness
 - Resilient submission: transient network failures (timeouts, dropped connections, 429/5xx) are retried automatically with backoff; a review that still fails to reach WaniKani is saved locally and retried automatically the next time you run `minaosou`, without asking you to answer it again
@@ -118,8 +119,43 @@ minaosou whoami                 # show account info
 minaosou reviews                # show review schedule for the next 24 h
 minaosou leeches                # list subjects tracked as leeches (repeated wrong answers)
 minaosou leeches --study        # practice all tracked leeches; never submitted to WaniKani
+minaosou forecast               # project the daily review load your pace leads to
 minaosou init                   # (re)create config file interactively
 ```
+
+### Forecasting your review load
+
+Your daily review count is not something you set — it is what your lesson pace and your accuracy add up to. `minaosou forecast` works out what they add up to *for you*.
+
+It reads your own record from WaniKani rather than applying a rule of thumb. Every item that has burned has a finished review count, so the mean of those is what an item has really cost you, ladder and mistakes and all. A per-review miss rate is then fitted to reproduce that cost, and the SRS is walked forward from it — using the stage intervals WaniKani reports, not hard-coded ones — to give the load your current pace settles at:
+
+```
+What an item has cost you, lesson to burned
+  reviews per item             17.4   (median 13; the gap is the leech tail)
+  days per item                 225   (median)
+  miss rate per review        23.3%   (answer counts bracket it at 15.5%-25.3%)
+
+At 10 lessons/day, that settles at
+
+  reviews per day               175
+  days from lesson to burn      265
+  items in circulation        2,651   (92 of them below Guru 1)
+```
+
+The projection is shown next to what your account holds today, so you can see whether the load is still climbing towards it or drifting down, and next to a sensitivity table for a miss rate above and below your own.
+
+`--reviews-per-day N` asks the question from the other end — given a load you are willing to sit, what would have to give:
+
+```
+To hold 100 reviews/day instead, either
+
+  · 5.7 lessons/day at today's miss rate, or
+  · a miss rate of 8.4% (from 23.3%), keeping 10 lessons/day
+```
+
+`--lessons N` projects a pace you are considering rather than your measured one, and `--days N` sets the window that measured pace is taken over (default 90).
+
+Two caveats the command states itself: burned items were learned at earlier levels, so they are the easier half of your history and the projection errs optimistic; and WaniKani records misses per question, never per review, so the item-level miss rate is bracketed rather than known exactly — the fitted rate is the one consistent with what your items actually cost.
 
 ### Leech tracking
 

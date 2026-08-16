@@ -23,6 +23,7 @@ import System.Directory
 import System.FilePath ((</>))
 import qualified Romaji
 import qualified TuiSpec
+import qualified SrsSpec
 import qualified Config
 import qualified History
 import qualified JsonStore
@@ -32,11 +33,25 @@ import qualified Api
 main :: IO ()
 main = hspec $ do
   TuiSpec.spec
+  SrsSpec.spec
   configSpec
   apiSpec
   historySpec
   utilSpec
   jsonStoreSpec
+
+  describe "groupDigits" $ do
+    it "leaves a short number alone" $ Util.groupDigits 42 `shouldBe` "42"
+    it "groups thousands" $ Util.groupDigits 1000 `shouldBe` "1,000"
+    it "groups a six-figure count" $ Util.groupDigits 162668 `shouldBe` "162,668"
+    it "groups an exact multiple of a thousand" $ Util.groupDigits 1000000 `shouldBe` "1,000,000"
+    it "keeps the sign outside the grouping" $ Util.groupDigits (-1234) `shouldBe` "-1,234"
+
+  describe "median" $ do
+    it "has no answer for an empty list" $ Util.median [] `shouldBe` Nothing
+    it "takes the middle of an odd-length list" $ Util.median [1, 5, 100] `shouldBe` Just 5
+    it "averages the middle pair of an even-length list" $
+      Util.median [1, 4, 6, 100] `shouldBe` Just 5
 
   describe "romajiToHiragana" $ do
 

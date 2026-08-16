@@ -5,8 +5,9 @@ import qualified Api
 import qualified Config
 import qualified History
 import qualified PendingReviews
+import qualified Srs
 import qualified Tui
-import Util (shortErr, strPadLeft, strPadRight, trySync)
+import Util (groupDigits, median, shortErr, strPadLeft, strPadRight, trySync)
 
 import Control.Applicative ((<|>))
 import Control.Concurrent.Async (mapConcurrently)
@@ -15,10 +16,12 @@ import Control.Exception (SomeException, bracket_, try)
 import System.Environment (lookupEnv)
 import System.Exit (die)
 
-import Data.Time (getCurrentTime, getCurrentTimeZone, utcToLocalTime, TimeZone, UTCTime)
+import Data.Time (addUTCTime, diffUTCTime, getCurrentTime, getCurrentTimeZone, utcToLocalTime, TimeZone, UTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
-import Data.List (nub, partition, sortOn)
-import Data.Maybe (fromMaybe)
+import Data.List (nub, partition, sort, sortOn)
+import Data.Maybe (fromMaybe, isJust)
+import Numeric (showFFloat)
+import System.IO (hFlush, hPutStr, hPutStrLn, stderr)
 import Data.Map.Strict qualified as M
 import qualified Data.Set as Set
 import qualified Data.Text as T
@@ -389,7 +392,197 @@ main = do
           then runLeechStudy t history
           else runLeechList t history
 
+    Cli.Forecast forecastOpts -> do
+      t <- requireToken
+      runForecast t forecastOpts
+
     Cli.Study studyOpts -> runStudy studyOpts
+
+--------------------------------------------------------------------------------
+-- forecast
+--------------------------------------------------------------------------------
+
+-- | Project the daily review load a lesson pace settles at, from what the
+-- account has actually cost so far.
+--
+-- The load is a consequence of two things the user controls: how many items
+-- they start per day, and how often they answer wrong -- a miss is not just
+-- a repeat, it drops the item down the ladder, so its remaining intervals
+-- are paid over again. Both directions are reported, since "how many
+-- lessons can I afford" and "how accurate do I need to be" are one question
+-- asked from either end.
+runForecast :: String -> Cli.ForecastOpts -> IO ()
+runForecast t opts = do
+  mSys <- Api.getSrsSystem t
+  sys  <- maybe (die "WaniKani reported no spaced repetition system, so there is nothing to project against.") pure mSys
+
+  stats <- Api.getReviewStatistics t (fetchProgress "answer record")
+  hPutStrLn stderr ""
+  prog  <- Api.getProgress t (fetchProgress "item progress")
+  hPutStrLn stderr ""
+  now <- getCurrentTime
+
+  let burned  = Srs.burnedCohort prog stats
+      studied = Srs.cohortBy (isJust . Api.pgStartedAt) prog stats
+      lo      = Api.srsStartingStage sys
+      hi      = Api.srsBurningStage sys - 1
+      passing = Api.srsPassingStage sys
+      passLbl = Api.srsStageNumLabel passing
+
+  -- Two ways to pin the failure rate, in order of preference. What the
+  -- burned items really cost is the stronger evidence -- it is the outcome
+  -- itself rather than a proxy for it -- but nothing has burned on a young
+  -- account, and then the answer counts are all there is.
+  let fitted   = Srs.cohortMeanReviews burned >>= Srs.fitUniformFailure sys
+      bracketed = fmap (\(a, b) -> (a + b) / 2) (Srs.itemFailureBracket studied)
+
+  case fitted <|> bracketed of
+    Nothing -> putStrLn "Nothing to measure yet -- do some reviews and try again."
+    Just rate -> do
+      let model = Srs.uniformModel sys rate
+          pj    = Srs.project sys model
+
+          windowDays = max 1 (Cli.forecastDays opts)
+          cutoff     = addUTCTime (negate (fromIntegral windowDays * 86400)) now
+          startedIn  = length [ () | p <- prog, Just s <- [Api.pgStartedAt p], s >= cutoff ]
+          pace       = fromIntegral startedIn / fromIntegral windowDays :: Double
+          lessons    = case Cli.forecastLessons opts of
+                         Just n            -> fromIntegral (max 1 n)
+                         Nothing | pace > 0 -> pace
+                         Nothing            -> 10
+          paceNote = case Cli.forecastLessons opts of
+            Just _             -> ""
+            Nothing | pace > 0 -> " (your own pace over the last " <> show windowDays <> " days)"
+            Nothing            -> " (assumed -- you started no lessons in the last "
+                                    <> show windowDays <> " days)"
+
+          circulating = length [ () | p <- prog, inRange (Api.pgSrsStage p) ]
+          belowPass   = length [ () | p <- prog, inRange (Api.pgSrsStage p)
+                                    , Api.pgSrsStage p < passing ]
+          inRange st  = st >= lo && st <= hi
+
+          burnDays = median (sort
+            [ realToFrac (diffUTCTime b st) / 86400
+            | p <- prog, Just b <- [Api.pgBurnedAt p], Just st <- [Api.pgStartedAt p] ])
+
+      putStrLn $
+        "Measured from your own record: " <> groupDigits (Srs.cohItems studied)
+        <> " items studied, " <> groupDigits (Srs.cohItems burned) <> " of them burned."
+      putStrLn ""
+
+      putStrLn "Answer accuracy"
+      putStrLn $ accuracyRow "  everything you have studied" studied
+      putStrLn $ accuracyRow "  just the items that burned " burned
+      putStrLn $
+        "\n  Burned items were learned at earlier levels, so they are the easier\n\
+        \  half of your history. Where the two rows differ, the projection below\n\
+        \  is the optimistic one."
+
+      putStrLn ""
+      putStrLn "What an item has cost you, lesson to burned"
+      case Srs.cohortMeanReviews burned of
+        Nothing -> putStrLn "  nothing has burned yet -- the figures below come from your answer counts instead"
+        Just mean -> do
+          putStrLn $ "  reviews per item          " <> strPadLeft 7 (fmt1 mean)
+            <> maybe "" (\m -> "   (median " <> fmt0 m <> "; the gap is the leech tail)")
+                     (Srs.cohortMedianReviews burned)
+          case burnDays of
+            Nothing -> pure ()
+            Just d  -> putStrLn $ "  days per item             " <> strPadLeft 7 (fmt0 d) <> "   (median)"
+      putStrLn $ "  miss rate per review      " <> strPadLeft 7 (pct rate)
+        <> maybe ""
+             (\(a, b) -> "   (answer counts bracket it at " <> pct a <> "-" <> pct b <> ")")
+             (Srs.itemFailureBracket burned)
+
+      putStrLn ""
+      putStrLn $ "At " <> fmtPace lessons <> " lessons/day" <> paceNote <> ", that settles at"
+      putStrLn ""
+      putStrLn $ "  reviews per day           " <> strPadLeft 7 (fmt0 (lessons * Srs.pjReviewsPerItem pj))
+      putStrLn $ "  days from lesson to burn  " <> strPadLeft 7 (fmt0 (Srs.pjDaysToBurn pj))
+      putStrLn $ "  items in circulation      " <> strPadLeft 7 (fmt0 (lessons * Srs.pjDaysToBurn pj))
+        <> "   (" <> fmt0 (lessons * apprenticeDays sys pj) <> " of them below " <> passLbl <> ")"
+      putStrLn ""
+      putStrLn $
+        "  Your account holds " <> groupDigits circulating <> " items right now, "
+        <> groupDigits belowPass <> " below " <> passLbl <> ", so at this\n  pace the load is still "
+        <> (if fromIntegral circulating > lessons * Srs.pjDaysToBurn pj then "drifting down" else "climbing")
+        <> " towards the figures above."
+
+      putStrLn ""
+      putStrLn "If your miss rate moved, at the same lesson pace"
+      putStrLn ""
+      putStrLn "  miss rate   reviews/day   lesson to burn"
+      mapM_ (putStrLn . fmtScenario sys model lessons) [0.5, 0.75, 1.0, 1.25, 1.5]
+
+      case Cli.forecastReviewsPerDay opts of
+        Nothing -> pure ()
+        Just budget -> do
+          putStrLn ""
+          putStrLn ("To hold " <> show budget <> " reviews/day instead, either")
+          putStrLn ""
+          putStrLn $
+            "  · " <> fmt1 (fromIntegral budget / Srs.pjReviewsPerItem pj)
+            <> " lessons/day at today's miss rate, or"
+          putStrLn $
+            "  · " <> case Srs.failureScaleFor sys model (fromIntegral budget / lessons) of
+              Just k ->
+                let scaled = Srs.scaleFailure k model
+                in "a miss rate of " <> pct (Srs.overallFailure (Srs.project sys scaled) scaled)
+                   <> " (from " <> pct rate <> "), keeping " <> fmtPace lessons <> " lessons/day"
+              Nothing ->
+                "no miss rate reaches it at " <> fmtPace lessons
+                <> " lessons/day -- even a flawless run costs "
+                <> fmt0 (lessons * fromIntegral (hi - lo + 1)) <> " reviews/day"
+  where
+    fetchProgress what n = do
+      hPutStr stderr ("\rReading your " <> what <> "… " <> groupDigits n <> " records   ")
+      hFlush stderr
+
+-- | Expected days an item spends below the passing stage -- the Apprentice
+-- churn. Those stages come back within hours, so they dominate what a day
+-- actually feels like, far beyond their share of the items.
+apprenticeDays :: Api.SrsSystem -> Srs.Projection -> Double
+apprenticeDays sys pj =
+  sum [ d | (s, d) <- Srs.pjDays pj, s < Api.srsPassingStage sys ]
+
+accuracyRow :: String -> Srs.Cohort -> String
+accuracyRow label c =
+  label <> "  " <> strPadLeft 9 (groupDigits (Srs.cohReviews c)) <> " reviews"
+  <> "   meaning " <> strPadLeft 6 (share (Srs.cohMeaningWrong c) (Srs.cohReviews c))
+  <> "   reading " <> strPadLeft 6 (share (Srs.cohReadingWrong c) (Srs.cohReadingReviews c))
+  <> " missed"
+  where
+    share _ 0 = "--"
+    share x n = pct (fromIntegral x / fromIntegral n)
+
+-- | One row of the sensitivity table: the fitted miss rate multiplied by a
+-- factor, so the user can see what a given change of accuracy is worth
+-- before deciding whether it is worth chasing.
+fmtScenario :: Api.SrsSystem -> (Int -> Srs.StageModel) -> Double -> Double -> String
+fmtScenario sys model lessons k =
+  "  " <> strPadLeft 9 (pct (Srs.overallFailure pj scaled))
+  <> strPadLeft 14 (fmt0 (lessons * Srs.pjReviewsPerItem pj))
+  <> strPadLeft 17 (fmt0 (Srs.pjDaysToBurn pj) <> " days")
+  <> (if k == 1.0 then "   <- now" else "")
+  where
+    scaled = Srs.scaleFailure k model
+    pj     = Srs.project sys scaled
+
+pct :: Double -> String
+pct x = showFFloat (Just 1) (100 * x) "" <> "%"
+
+fmt0 :: Double -> String
+fmt0 x = groupDigits (round x)
+
+fmt1 :: Double -> String
+fmt1 x = showFFloat (Just 1) x ""
+
+-- | A lesson pace: measured, so usually fractional, but "10 lessons/day"
+-- reads better than "10.0" when the user asked for exactly that.
+fmtPace :: Double -> String
+fmtPace x
+  | x == fromIntegral (round x :: Int) = show (round x :: Int)
+  | otherwise                          = fmt1 x
 
 -- | Attach the user's own WaniKani study-material data (meaning synonyms and
 -- the record id) to each subject, so 'Tui.acceptedMeanings' treats the

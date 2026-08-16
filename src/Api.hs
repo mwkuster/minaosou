@@ -22,6 +22,13 @@ module Api
 
   , SrsStage(..)
   , srsStageLabel
+  , srsStageNumLabel
+  , SrsSystem(..)
+  , getSrsSystem
+  , ReviewStat(..)
+  , getReviewStatistics
+  , Progress(..)
+  , getProgress
   , Assignment(..)
   , getAvailableAssignments
   , getAssignmentsBySubjectIds
@@ -342,6 +349,17 @@ srsStageFromInt 7         = Master
 srsStageFromInt 8         = Enlightened
 srsStageFromInt _         = Burned
 
+-- | The individual stage, not just its band: @5@ is "Guru 1", not "Guru".
+-- WaniKani's SRS moves one numbered stage at a time, so a per-stage report
+-- (see "Srs") needs to name them individually. The band names themselves
+-- are not in the API -- only positions are -- hence the same literals
+-- 'srsStageFromInt' already relies on.
+srsStageNumLabel :: Int -> String
+srsStageNumLabel n = case srsStageFromInt n of
+  Apprentice -> "Apprentice " <> show n
+  Guru       -> "Guru " <> show (n - 4)
+  s          -> srsStageLabel s
+
 data Assignment = Assignment
   { asId        :: AssignmentId
   , asSubjectId :: SubjectId
@@ -460,6 +478,159 @@ getStillAvailableAssignmentIds token now ids = do
         pure (map toAssignment (peData (responseBody resp :: PagedEnvelope AssignmentData)))
   results <- mapM fetchAssignmentIdsChunk (chunkN 100 ids)
   pure (Set.fromList (map asId (concat results)))
+
+--------------------------------------------------------------------------------
+-- Spaced repetition system (the stage ladder itself)
+--------------------------------------------------------------------------------
+
+-- | The shape of the SRS an item climbs: where a freshly-learned item
+-- starts, which position counts as passed, which as burned, and how long
+-- each position waits before its review comes due.
+--
+-- Fetched rather than hard-coded so a projection built on it (see "Srs")
+-- stays right if WaniKani retunes an interval, and so the accelerated early
+-- levels are not silently modelled with the standard timings.
+data SrsSystem = SrsSystem
+  { srsName          :: Text
+  , srsStartingStage :: Int
+  , srsPassingStage  :: Int
+  , srsBurningStage  :: Int
+  , srsStageSeconds  :: M.Map Int Int
+    -- ^ Stage position to its interval in seconds. Positions with no
+    -- interval (the lesson stage, and burned) are absent.
+  } deriving (Show, Eq)
+
+instance FromJSON SrsSystem where
+  parseJSON = withObject "SrsSystem" $ \o -> do
+    d      <- o .: "data"
+    nm     <- d .: "name"
+    start  <- d .: "starting_stage_position"
+    pass   <- d .: "passing_stage_position"
+    burn   <- d .: "burning_stage_position"
+    stages <- d .: "stages"
+    secs   <- mapM parseStage (stages :: [Object])
+    pure SrsSystem
+      { srsName          = nm
+      , srsStartingStage = start
+      , srsPassingStage  = pass
+      , srsBurningStage  = burn
+      , srsStageSeconds  = M.fromList (catMaybes secs)
+      }
+    where
+      parseStage s = do
+        pos <- s .: "position"
+        ivl <- s .:? "interval"
+        pure (fmap ((,) pos) ivl)
+
+-- | The account's SRS. WaniKani exposes a collection (a legacy system
+-- survives alongside the current one), ordered by id; the first is the one
+-- new subjects use, and the difference between them does not reach far
+-- enough to matter for a workload projection.
+getSrsSystem :: String -> IO (Maybe SrsSystem)
+getSrsSystem token = runApi $ do
+  resp <- req
+    GET
+    (https "api.wanikani.com" /: "v2" /: "spaced_repetition_systems")
+    NoReqBody
+    jsonResponse
+    (apiOpts token)
+  pure $ case peData (responseBody resp :: PagedEnvelope SrsSystem) of
+    (s:_) -> Just s
+    []    -> Nothing
+
+--------------------------------------------------------------------------------
+-- Review history
+--------------------------------------------------------------------------------
+
+-- | A subject's lifetime answer record.
+--
+-- WaniKani only completes a review once the item has been answered right,
+-- and records exactly one "correct" per completed review -- so
+-- @meaning_correct@ /is/ the number of reviews the item has had, and the
+-- incorrect counters are the misses along the way. (Verified against the
+-- API: every item that burned without a single miss has @meaning_correct@
+-- of exactly 8, one per stage.)
+data ReviewStat = ReviewStat
+  { rsSubjectId    :: SubjectId
+  , rsReviews      :: Int
+  , rsMeaningWrong :: Int
+  , rsReadingWrong :: Int
+  , rsHasReading   :: Bool
+    -- ^ Whether the item is ever asked for a reading. Radicals are not, but
+    -- WaniKani still mirrors their meaning counts into the reading fields
+    -- with zero misses, which would silently flatter a reading-accuracy
+    -- figure that counted them.
+  } deriving (Show, Eq)
+
+instance FromJSON ReviewStat where
+  parseJSON = withObject "ReviewStat" $ \o -> do
+    d      <- o .: "data"
+    sid    <- d .: "subject_id"
+    sType  <- d .: "subject_type"
+    mc     <- d .: "meaning_correct"
+    mi     <- d .: "meaning_incorrect"
+    ri     <- d .: "reading_incorrect"
+    st     <- parseSubjectType sType
+    pure ReviewStat
+      { rsSubjectId    = sid
+      , rsReviews      = mc
+      , rsMeaningWrong = mi
+      , rsReadingWrong = ri
+      , rsHasReading   = st /= Radical
+      }
+
+-- | How far along the ladder a subject is, and when it got there. The
+-- timestamps are what make a projection checkable: they say how long items
+-- really took, against which a model can only predict.
+data Progress = Progress
+  { pgSubjectId :: SubjectId
+  , pgSrsStage  :: Int
+  , pgStartedAt :: Maybe UTCTime
+    -- ^ When the lesson was done, i.e. when the item entered the ladder.
+  , pgBurnedAt  :: Maybe UTCTime
+  } deriving (Show, Eq)
+
+instance FromJSON Progress where
+  parseJSON = withObject "Progress" $ \o -> do
+    d       <- o .: "data"
+    sid     <- d .: "subject_id"
+    stage   <- d .: "srs_stage"
+    started <- d .:? "started_at"
+    burned  <- d .:? "burned_at"
+    pure (Progress sid stage (started >>= iso8601ParseM) (burned >>= iso8601ParseM))
+
+-- | Every review statistic the account has, one record per subject ever
+-- reviewed.
+getReviewStatistics :: String -> (Int -> IO ()) -> IO [ReviewStat]
+getReviewStatistics token =
+  collectAll token (https "api.wanikani.com" /: "v2" /: "review_statistics") mempty
+
+-- | Every assignment the account has, hidden subjects excluded (WaniKani
+-- retires the occasional item; its history should not weigh on a forecast).
+getProgress :: String -> (Int -> IO ()) -> IO [Progress]
+getProgress token =
+  collectAll token (https "api.wanikani.com" /: "v2" /: "assignments") ("hidden" =: False)
+
+-- | Follow a collection to its last page, reporting the running total as it
+-- goes. These are the only calls in minaosou whose cost grows with how long
+-- the user has been studying -- an established account runs to a dozen-odd
+-- pages each -- so they should not sit silent behind the rate limiter.
+collectAll
+  :: FromJSON a
+  => String -> Url 'Https -> Option 'Https -> (Int -> IO ()) -> IO [a]
+collectAll token endpoint params progress = do
+  firstPage <- runApi $ do
+    resp <- req GET endpoint NoReqBody jsonResponse (params <> apiOpts token)
+    pure (responseBody resp)
+  go [peData firstPage] (length (peData firstPage)) firstPage
+  where
+    go chunks n page = do
+      progress n
+      case peNextUrl page of
+        Nothing  -> pure (concat (reverse chunks))
+        Just url -> do
+          next <- fetchPage token url
+          go (peData next : chunks) (n + length (peData next)) next
 
 --------------------------------------------------------------------------------
 -- Subjects (to show prompts + accepted answers)
