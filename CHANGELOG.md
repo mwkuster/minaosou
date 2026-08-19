@@ -1,14 +1,11 @@
 # Revision history for minaosou
 
-## 1.2.0 -- unreleased
+## 1.2.0 -- 2026-08-19
 
 * **`minaosou forecast`.** Projects the daily review load your lesson pace settles at, from what your own account has actually cost. It measures the reviews your burned items really took (the SRS ladder as you have walked it, not as a table says it should go), fits a per-review miss rate to that, and reports the resulting reviews/day, time from lesson to burned, and items in circulation -- next to what your account holds today, so you can see which way the load is drifting. `--reviews-per-day N` solves the question backwards: the lesson pace, or the accuracy, that would hold the load at N. Stage intervals come from WaniKani's `spaced_repetition_systems` endpoint rather than being hard-coded.
 * **Session accuracy on the end screen.** The summary shown before you submit now reports the share of items you got right (`accuracy: 85.0%  (17/20 items)`). It counts items, not answers: an item you missed twice before getting it right still counts once, and both of its questions have to be clean for it to count as correct -- the same tally the clean/missed breakdown underneath is grouped from. An overridden answer is not a miss. The figure is coloured for how the session went: green from 80%, yellow from 60%, red below.
 * **`forecast` caches your history locally.** A full sweep is ~29 requests against WaniKani's 60-per-minute budget, so running it three times in a minute used to fail with a rate-limit error (the in-process limiter cannot see what an earlier run already spent). Runs now carry WaniKani's `data_updated_at` watermark and ask only for what changed since, which takes a repeat run from ~29 requests and 7 seconds down to 3 and about one. `--refresh` forces a full re-read. A rate limit that does happen is now reported as such, instead of dumping a raw HTTP exception.
-
-## 1.1.1 -- unreleased
-
-* **`minaosou --version`.** Reports the version the binary was built from, so a downloaded release can be told apart from a local build.
+* **`minaosou --version`.** Reports the version the binary was built from, so a downloaded release can be told apart from a local build. Developed as 1.1.1, which was never released on its own.
 
 ## 1.1.0 -- 2026-08-15
 
