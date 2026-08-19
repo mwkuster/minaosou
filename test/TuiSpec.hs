@@ -555,6 +555,49 @@ spec = do
     it "carries the minute rather than rounding to :60" $
       Tui.formatAvgPerItem 119.7 1 `shouldBe` Just "2:00"
 
+  describe "formatAccuracy" $ do
+    it "is Nothing with no items" $
+      Tui.formatAccuracy 0 0 `shouldBe` Nothing
+
+    it "is the share of items that came out clean" $
+      Tui.formatAccuracy 17 3 `shouldBe` Just "85.0%  (17/20 items)"
+
+    it "shows a clean session as 100%" $
+      Tui.formatAccuracy 12 0 `shouldBe` Just "100.0%  (12/12 items)"
+
+    it "shows a session with nothing clean as 0%" $
+      Tui.formatAccuracy 0 3 `shouldBe` Just "0.0%  (0/3 items)"
+
+  describe "accuracyBand" $ do
+    it "is good from 80%" $ do
+      Tui.accuracyBand 1.0  `shouldBe` Tui.AccGood
+      Tui.accuracyBand 0.8  `shouldBe` Tui.AccGood
+
+    it "is fair from 60% up to 80%" $ do
+      Tui.accuracyBand 0.79 `shouldBe` Tui.AccFair
+      Tui.accuracyBand 0.6  `shouldBe` Tui.AccFair
+
+    it "is poor below 60%" $ do
+      Tui.accuracyBand 0.59 `shouldBe` Tui.AccPoor
+      Tui.accuracyBand 0.0  `shouldBe` Tui.AccPoor
+
+    it "puts an exact 4-in-5 session on the good side of the boundary" $
+      fmap Tui.accuracyBand (Tui.accuracyShare 16 4) `shouldBe` Just Tui.AccGood
+
+    it "puts an exact 3-in-5 session on the fair side of the boundary" $
+      fmap Tui.accuracyBand (Tui.accuracyShare 12 8) `shouldBe` Just Tui.AccFair
+
+  describe "sessionItemTally" $ do
+    it "is empty before anything has been reviewed" $
+      Tui.sessionItemTally (stateWith M.empty M.empty) `shouldBe` (0, 0)
+
+    it "counts an item missed on either question as missed, once" $ do
+      let prog = M.fromList
+            [ (sid 1, Tui.initProgress kanjiSubj)
+            , (sid 2, (Tui.initProgress kanjiSubj) { Tui.pMeaningWrong = 2 })
+            , (sid 3, (Tui.initProgress vocabSubj) { Tui.pReadingWrong = 1 })
+            ]
+      Tui.sessionItemTally (stateWith prog M.empty) `shouldBe` (1, 2)
   describe "freezeClock / chargeTime" $ do
     let t0' = UTCTime (fromGregorian 2024 1 1) (secondsToDiffTime 0)
         at n = UTCTime (fromGregorian 2024 1 1) (secondsToDiffTime n)

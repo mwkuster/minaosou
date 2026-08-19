@@ -31,6 +31,7 @@ theMap = attrMap V.defAttr
   , (attrName "header",  fg V.cyan)
   , (attrName "ok",      fg V.green)
   , (attrName "bad",     fg V.red)
+  , (attrName "warn",    fg V.yellow)
   , (attrName "hint",    V.defAttr `V.withStyle` V.dim)
   , (attrName "bigchar", V.defAttr `V.withStyle` V.bold `V.withForeColor` V.brightYellow)
   , (attrName "input",   V.defAttr `V.withForeColor` V.brightWhite)
@@ -139,7 +140,9 @@ drawMain st
                    , str ("correct:     " <> show (stCorrect st))
                    , str ("wrong:       " <> show (stWrong st))
                    , str ("overridden:  " <> show (stOverridden st))
-                   , str ("submissions: " <> show (length (mkSubmissions st)))
+                   ]
+                ++ drawAccuracy st
+                ++ [ str ("submissions: " <> show (length (mkSubmissions st)))
                    ]
                 -- No "session:" line: the corner timer stops at the last
                 -- answer, so it is already showing the session total here.
@@ -480,6 +483,22 @@ sessionAvgPerItem :: AppState -> Maybe String
 sessionAvgPerItem st =
   formatAvgPerItem (sum (M.elems (stSubjTime st))) (M.size (stSubjTime st))
 
+-- | The accuracy line, coloured by how the session went: green from 80%,
+-- yellow from 60%, red below. Empty before any item has been reviewed,
+-- where there is no ratio to report.
+drawAccuracy :: AppState -> [Widget Name]
+drawAccuracy st =
+  [ withAttr (bandAttr (accuracyBand share)) $ str ("accuracy:    " <> label)
+  | Just share <- [accuracyShare clean missed]
+  , Just label <- [formatAccuracy clean missed]
+  ]
+  where (clean, missed) = sessionItemTally st
+
+bandAttr :: AccuracyBand -> AttrName
+bandAttr AccGood = attrName "ok"
+bandAttr AccFair = attrName "warn"
+bandAttr AccPoor = attrName "bad"
+
 drawBreakdown :: AppState -> [Widget Name]
 drawBreakdown st =
   case perSubject of
@@ -493,7 +512,7 @@ drawBreakdown st =
       [ (subj, missed, subjectTime st sid)
       | (sid, p) <- M.toList (stProgress st)
       , Just subj <- [M.lookup sid (stAllSubjects st)]
-      , let missed = pMeaningWrong p > 0 || pReadingWrong p > 0
+      , let missed = missedItem p
       ]
 
     -- Clean / missed / time / how many of them the session actually spent

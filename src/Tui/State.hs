@@ -61,6 +61,14 @@ module Tui.State
   , markAutoplayed
   , missedBeforeLabel
 
+    -- Session stats
+  , missedItem
+  , sessionItemTally
+  , accuracyShare
+  , formatAccuracy
+  , AccuracyBand(..)
+  , accuracyBand
+
     -- Session timer
   , formatElapsed
   , formatAvgPerItem
@@ -358,13 +366,20 @@ mkSubmissions st =
   , let asgId = Api.asId asg
   ]
 
+-- | Whether an item was missed at least once this session, on either of its
+-- questions. An overridden answer is not a miss (that is what the override
+-- means), so an overridden item still counts as clean -- which is also what
+-- gets submitted to WaniKani for it.
+missedItem :: Progress -> Bool
+missedItem p = pMeaningWrong p > 0 || pReadingWrong p > 0
+
 -- | This session's wrong-answer counts, one entry per subject that was
 -- missed at least once (clean subjects are omitted).
 sessionWrongCounts :: AppState -> [(Api.SubjectId, Int, Int)]
 sessionWrongCounts st =
   [ (sid, pMeaningWrong p, pReadingWrong p)
   | (sid, p) <- M.toList (stProgress st)
-  , pMeaningWrong p > 0 || pReadingWrong p > 0
+  , missedItem p
   ]
 
 -- | The wrong-answer counts that may be written to the cross-session leech
@@ -699,6 +714,51 @@ formatAvgPerItem total n
            then let (m, s) = round secs `divMod` (60 :: Int)
                 in show m <> ":" <> pad2 s
            else showFFloat (Just 1) (max 0 secs) "s"
+
+-- | Items answered clean, and items missed at least once -- the same tally
+-- the by-type and by-SRS-stage breakdown is grouped from, so the headline
+-- percentage always adds up to the rows below it.
+sessionItemTally :: AppState -> (Int, Int)
+sessionItemTally st =
+  ( length (filter (not . missedItem) ps)
+  , length (filter missedItem        ps) )
+  where ps = M.elems (stProgress st)
+
+-- | Share of the session's items that came out clean, from 0 to 1.
+-- The denominator is items, not answers: an item missed twice on the way to
+-- getting it right still counts once, and both of its questions have to be
+-- clean for it to count as correct. 'Nothing' with no items, where the ratio
+-- is undefined and the caller should leave the line out rather than show 0%.
+accuracyShare :: Int -> Int -> Maybe Double
+accuracyShare clean missed
+  | total <= 0 = Nothing
+  | otherwise  = Just (fromIntegral clean / fromIntegral total)
+  where total = clean + missed
+
+-- | The accuracy line for the end-of-session screen, e.g.
+-- @"85.0%  (17/20 items)"@. The fraction is spelled out because the
+-- correct/wrong counts shown above it are answer-level and so do not divide
+-- into this percentage.
+formatAccuracy :: Int -> Int -> Maybe String
+formatAccuracy clean missed =
+  fmap render (accuracyShare clean missed)
+  where
+    render share =
+      showFFloat (Just 1) (100 * share) "%"
+        <> "  (" <> show clean <> "/" <> show (clean + missed) <> " items)"
+
+-- | How a session's accuracy reads at a glance, which is what colours the
+-- line: 'AccGood' from 80%, 'AccFair' from 60%, 'AccPoor' below. The
+-- thresholds live here rather than in the drawing code so they are one
+-- testable definition rather than a pair of magic numbers in a guard.
+data AccuracyBand = AccGood | AccFair | AccPoor
+  deriving (Eq, Show)
+
+accuracyBand :: Double -> AccuracyBand
+accuracyBand share
+  | share >= 0.8 = AccGood
+  | share >= 0.6 = AccFair
+  | otherwise    = AccPoor
 
 -- | Charge the time since the last sample to the item that was on screen
 -- while it passed, and move the sample point to @now@. 'Nothing' (no current

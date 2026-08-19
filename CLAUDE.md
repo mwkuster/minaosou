@@ -63,6 +63,10 @@ The clock **stops** when the last item leaves the queue: `Tui.Event.accountTime`
 
 The same hook charges the interval since `stLastSample` to whichever subject was on screen for it (`chargeTime` → `stSubjTime`), so an item's total covers both its questions, wrong-answer screens, overlays, and requeued retries. The Done screen shows `avg/item:` and an `avg:` column per breakdown row; the per-row denominator counts only subjects that got screen time, so an abandoned session isn't averaged over items it never showed. It deliberately does **not** repeat the session total — the stopped corner timer is already showing it.
 
+### Session accuracy
+
+The Done screen's `accuracy:` line is **items, not answers**: `Tui.State.sessionItemTally` splits `stProgress` into items that came out clean and items missed at least once, and `formatAccuracy` renders the share as `85.0%  (17/20 items)`. The counts above it (`correct:`/`wrong:`) are answer-level and deliberately do not divide into it — a requeued item contributes several answers but one item — which is why the line carries its own `n/N items` fraction. The tally is the same one `drawBreakdown` groups by type and SRS stage, via the shared `missedItem` predicate, so the headline always adds up to the rows below it. An overridden answer is not a miss, so an overridden item counts as clean, matching what gets submitted for it. The line is coloured by `accuracyBand`: green (`ok`) from 80%, yellow (`warn`) from 60%, red (`bad`) below — the thresholds sit in `Tui.State` next to the ratio rather than in the guard that picks the attribute, so they are tested.
+
 ### Forecasting (`Srs.hs`, `minaosou forecast`)
 
 `visitsPerStage` computes the expected number of reviews an item spends at each stage before burning; everything else (reviews/day, days to burn, pool sizes) is bookkeeping on top of it. The recursion is forward, not a linear solve: `W s` (visits accumulated climbing s → s+1) only references stages below `s`, because a miss never moves an item forwards.
