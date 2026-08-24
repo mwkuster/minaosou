@@ -1,6 +1,6 @@
 # Revision history for minaosou
 
-## 1.2.1 -- unreleased
+## 1.2.1 -- 2026-08-24
 
 * **A fast clock no longer rejects every review you submit.** Submissions carried a `created_at` stamped from the local clock, and WaniKani validates that against its own, refusing anything in the future with `created_at must be in the acceptable time range` (HTTP 422). A machine running even a few seconds ahead -- after a suspend, or a stretch without an NTP exchange -- therefore failed its entire batch, every item at once. A review being submitted now no longer names a time at all, so WaniKani stamps it; a review resubmitted from an earlier session still carries the time it was really answered, since that is what the next review is scheduled from, unless that timestamp is too recent to trust.
 
