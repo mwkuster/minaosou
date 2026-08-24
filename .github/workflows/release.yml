@@ -3,6 +3,10 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # Build all three platforms without cutting a release, so a broken
+  # toolchain is found before a tag depends on it -- the 1.2.1 Linux build
+  # failed at release time, with the tag already pushed.
+  workflow_dispatch:
 
 jobs:
   build-linux-static:
@@ -11,7 +15,7 @@ jobs:
     permissions:
       contents: write
     container:
-      image: alpine:3.19
+      image: alpine:3.23
     steps:
       - uses: actions/checkout@v5
 
@@ -20,7 +24,7 @@ jobs:
           apk add --no-cache \
             ghc cabal \
             musl-dev zlib-dev zlib-static \
-            gmp-dev \
+            gmp-dev gmp-static \
             libffi-dev \
             ncurses-dev ncurses-static \
             git
@@ -28,8 +32,8 @@ jobs:
       - name: Cache Cabal store
         uses: actions/cache@v5
         with:
-          # Alpine's cabal 3.10 follows the XDG layout, so the store is here
-          # and not in ~/.cabal -- which this used to cache, always missing.
+          # Alpine's cabal follows the XDG layout, so the store is here and
+          # not in ~/.cabal -- which this used to cache, always missing.
           path: |
             ~/.cache/cabal
             ~/.local/state/cabal
@@ -37,18 +41,7 @@ jobs:
           restore-keys: linux-static-cabal-
 
       - name: Update Cabal index
-        # Seed Hackage's current TUF root before updating. cabal 3.10
-        # bootstraps the root from keys predating Hackage's rotation to root
-        # version 8 (6 keys, threshold 3) and fails the update outright:
-        #   <repo>/root.json does not have enough signatures signed with the
-        #   appropriate keys
-        # Broke the 1.2.1 release build; the other two jobs get a current
-        # cabal from haskell-actions/setup and were unaffected.
-        run: |
-          root="$HOME/.cache/cabal/packages/hackage.haskell.org/root.json"
-          mkdir -p "$(dirname "$root")"
-          wget -qO "$root" https://hackage.haskell.org/root.json
-          cabal update
+        run: cabal update
 
       - name: Build static binary
         run: |
@@ -62,6 +55,7 @@ jobs:
           strip minaosou-linux-x86_64
 
       - name: Upload to release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v3
         with:
           files: minaosou-linux-x86_64
@@ -77,7 +71,7 @@ jobs:
       - name: Set up GHC
         uses: haskell-actions/setup@v2
         with:
-          ghc-version: '9.6'
+          ghc-version: '9.8'
           cabal-version: 'latest'
 
       - name: Cache Cabal store
@@ -99,6 +93,7 @@ jobs:
           strip minaosou-macos-arm64
 
       - name: Upload to release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v3
         with:
           files: minaosou-macos-arm64
@@ -115,7 +110,7 @@ jobs:
         id: setup
         uses: haskell-actions/setup@v2
         with:
-          ghc-version: '9.6'
+          ghc-version: '9.8'
           cabal-version: 'latest'
 
       - name: Cache Cabal store
@@ -138,6 +133,7 @@ jobs:
         run: cp "$(cabal list-bin minaosou)" minaosou-windows-x86_64.exe
 
       - name: Upload to release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v3
         with:
           files: minaosou-windows-x86_64.exe
