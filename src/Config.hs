@@ -73,10 +73,12 @@ parseConfig s =
 
 lookupKey :: String -> [String] -> Maybe String
 lookupKey key ls =
+  -- The @c : _@ pattern does the work of two guards at once: it drops blank
+  -- lines (an empty trim result simply doesn't match) and names the first
+  -- character, so the comment check needs no partial 'head'.
   case [ val | line <- ls
-             , let line' = trim line
-             , not (null line')
-             , head line' /= '#'
+             , line'@(c : _) <- [trim line]
+             , c /= '#'
              , (k, rest) <- [break (=='=') line']
              , trim k == key
              , let val = trim (drop 1 rest)

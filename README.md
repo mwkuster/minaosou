@@ -57,7 +57,7 @@ On Windows, place `minaosou-windows-x86_64.exe` somewhere on your `PATH`. Use a 
 
 ### Build from source
 
-Requires GHC and Cabal (tested with GHC 9.6, Cabal 3.x).
+Requires GHC and Cabal (tested with GHC 9.8, Cabal 3.x; 9.6 also builds).
 
 ```bash
 git clone https://github.com/mwkuster/minaosou
