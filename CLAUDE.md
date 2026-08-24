@@ -67,6 +67,28 @@ The same hook charges the interval since `stLastSample` to whichever subject was
 
 The Done screen's `accuracy:` line is **items, not answers**: `Tui.State.sessionItemTally` splits `stProgress` into items that came out clean and items missed at least once, and `formatAccuracy` renders the share as `85.0%  (17/20 items)`. The counts above it (`correct:`/`wrong:`) are answer-level and deliberately do not divide into it — a requeued item contributes several answers but one item — which is why the line carries its own `n/N items` fraction. The tally is the same one `drawBreakdown` groups by type and SRS stage, via the shared `missedItem` predicate, so the headline always adds up to the rows below it. An overridden answer is not a miss, so an overridden item counts as clean, matching what gets submitted for it. The line is coloured by `accuracyBand`: green (`ok`) from 80%, yellow (`warn`) from 60%, red (`bad`) below — the thresholds sit in `Tui.State` next to the ratio rather than in the guard that picks the attribute, so they are tested.
 
+### Submitting reviews and `created_at`
+
+WaniKani validates the POSTed `created_at` against **its own clock** and rejects
+anything in the future: `{"error":"created_at must be in the acceptable time
+range","code":422}`. The same error means "before the assignment's
+`available_at`", which is what you get when a review was **already recorded** —
+recording it moves `available_at` forward — so a 422 here reads as either "your
+clock is fast" or "this one is already in".
+
+A fresh submission therefore sends **no** `created_at` (`Api.reviewBody` omits
+the key on `Nothing`) and lets WaniKani stamp it. Sending the local time instead
+made one skewed clock fail a whole batch: on 2026-08-24 a machine ~10s ahead had
+all 26 reviews rejected, and the identical payload was accepted minutes later
+once the clock was corrected. `submitBatch` takes one timestamp for the batch, so
+the failure is all-or-nothing.
+
+`PendingReviews.retryCreatedAt` is the exception: a resubmitted review does pass
+the time it was really answered, because WaniKani schedules the next review from
+`created_at` and dropping it would push the schedule to the retry. It is only
+sent when it is older than `clockSkewMargin` (60s) — a timestamp barely in the
+past is more likely a fast clock than a real answer time.
+
 ### Forecasting (`Srs.hs`, `minaosou forecast`)
 
 `visitsPerStage` computes the expected number of reviews an item spends at each stage before burning; everything else (reviews/day, days to burn, pool sizes) is bookkeeping on top of it. The recursion is forward, not a linear solve: `W s` (visits accumulated climbing s → s+1) only references stages below `s`, because a miss never moves an item forwards.

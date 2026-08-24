@@ -43,10 +43,11 @@ module Api
   , putMeaningSynonyms
   , ReviewResult(..)
   , createReview
+  , reviewBody
   ) where
 
 import Control.Applicative ((<|>))
-import Data.Aeson (FromJSON(..), ToJSON(..), Object, object, withObject, (.:), (.:?), (.!=), (.=))
+import Data.Aeson (FromJSON(..), ToJSON(..), Object, Value, object, withObject, (.:), (.:?), (.!=), (.=))
 import Data.Aeson.Types (Parser)
 import qualified Data.Aeson.Key as Key
 import Data.List (sortOn)
@@ -905,18 +906,42 @@ instance FromJSON ReviewEnvelope where
     d <- o .: "data"
     ReviewEnvelope <$> d .: "ending_srs_stage"
 
-createReview :: String -> AssignmentId -> Int -> Int -> UTCTime -> IO ReviewResult
+-- | The POST body for a review.
+--
+-- 'created_at' is omitted when 'Nothing', which is not the same as sending
+-- the current time: WaniKani then stamps the review from *its own* clock.
+-- That matters because it validates the field against that clock and rejects
+-- anything in the future outright --
+--
+-- > {"error":"created_at must be in the acceptable time range","code":422}
+--
+-- -- so a client running even a few seconds fast fails every review it
+-- submits. Observed on 2026-08-24: a machine ~10s ahead after 20 hours
+-- without an NTP exchange had all 26 reviews of a batch rejected, and the
+-- identical payload was accepted once the clock was corrected. A fresh
+-- submission happens now by definition and has nothing to gain from naming
+-- its own timestamp, so it doesn't.
+--
+-- A resubmitted one is the exception and does pass a time: it was answered
+-- in an earlier session, and WaniKani schedules the next review from
+-- 'created_at', so dropping it would move the whole schedule forward to the
+-- retry. See 'PendingReviews.retryCreatedAt'.
+reviewBody :: AssignmentId -> Int -> Int -> Maybe UTCTime -> Value
+reviewBody assignmentId wrongMeaning wrongReading createdAt =
+  object
+    [ "review" .= object
+        ( [ "assignment_id"             .= unAssignmentId assignmentId
+          , "incorrect_meaning_answers" .= wrongMeaning
+          , "incorrect_reading_answers" .= wrongReading
+          ]
+          <> [ "created_at" .= iso8601Show t | Just t <- [createdAt] ]
+        )
+    ]
+
+createReview :: String -> AssignmentId -> Int -> Int -> Maybe UTCTime -> IO ReviewResult
 createReview token assignmentId wrongMeaning wrongReading createdAt =
   runApi $ do
-    let body =
-          object
-            [ "review" .= object
-                [ "assignment_id"             .= unAssignmentId assignmentId
-                , "incorrect_meaning_answers" .= wrongMeaning
-                , "incorrect_reading_answers" .= wrongReading
-                , "created_at"                .= iso8601Show createdAt
-                ]
-            ]
+    let body = reviewBody assignmentId wrongMeaning wrongReading createdAt
 
     resp <- req
       POST

@@ -6,7 +6,7 @@ import Test.Hspec
 import Control.Exception
   ( ErrorCall(..), SomeException, AsyncException(ThreadKilled)
   , bracket, throwIO, toException, try )
-import Data.Aeson (decode, encode)
+import Data.Aeson (Value(..), decode, encode)
 import qualified Data.ByteString as BS
 import Data.ByteString.Lazy (ByteString)
 import Data.Char (isDigit)
@@ -30,6 +30,7 @@ import qualified ForecastCache
 import qualified JsonStore
 import qualified Util
 import qualified Api
+import qualified PendingReviews
 
 main :: IO ()
 main = hspec $ do
@@ -37,6 +38,7 @@ main = hspec $ do
   SrsSpec.spec
   configSpec
   apiSpec
+  reviewSubmissionSpec
   historySpec
   forecastCacheSpec
   utilSpec
@@ -846,3 +848,42 @@ jsonStoreSpec = describe "JsonStore" $ do
     let path = dir </> "nested" </> "deep" </> "state.json"
     JsonStore.saveJsonFile path ([1] :: [Int])
     JsonStore.loadJsonFile [] path >>= (`shouldBe` ([1] :: [Int]))
+
+-- | What gets POSTed for a review, and when it names its own timestamp.
+-- WaniKani validates 'created_at' against its own clock and rejects anything
+-- ahead of it, so a client that is running fast must not supply one.
+reviewSubmissionSpec :: Spec
+reviewSubmissionSpec = describe "review submission" $ do
+
+  let answeredAt = UTCTime (fromGregorian 2026 8 24) (secondsToDiffTime (17 * 3600 + 53 * 60 + 3))
+      review cr  = M.lookup "review"
+                     =<< (decode (encode (Api.reviewBody (Api.AssignmentId 42) 1 2 cr))
+                            :: Maybe (M.Map T.Text (M.Map T.Text Value)))
+
+  describe "reviewBody" $ do
+    it "always carries the assignment and the wrong-answer counts" $
+      fmap (M.lookup "assignment_id") (review Nothing) `shouldBe` Just (Just (Number 42))
+
+    it "omits created_at when no time is given" $
+      fmap (M.member "created_at") (review Nothing) `shouldBe` Just False
+
+    it "sends created_at as ISO 8601 UTC when a time is given" $
+      fmap (M.lookup "created_at") (review (Just answeredAt))
+        `shouldBe` Just (Just (String "2026-08-24T17:53:03Z"))
+
+  describe "retryCreatedAt" $ do
+    let pending  = PendingReviews.PendingReview (Api.AssignmentId 42) 0 0 answeredAt
+        margin   = PendingReviews.clockSkewMargin
+        at delta = PendingReviews.retryCreatedAt (addUTCTime delta answeredAt) pending
+
+    it "keeps the original answer time on a retry a run later" $
+      at 3600 `shouldBe` Just answeredAt
+
+    it "drops a timestamp that is barely in the past -- more likely a fast clock" $
+      at (margin - 1) `shouldBe` Nothing
+
+    it "drops a timestamp the clock has not even reached yet" $
+      at (-30) `shouldBe` Nothing
+
+    it "keeps one just past the margin" $
+      at (margin + 1) `shouldBe` Just answeredAt

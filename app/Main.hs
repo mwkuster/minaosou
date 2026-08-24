@@ -188,7 +188,8 @@ main = do
                 then pure Set.empty
                 else do
                   (toRetry, droppedN) <- dropAlreadyRecorded pending
-                  outcomes <- mapConcurrentlyN maxParallelSubmits postPendingReview toRetry
+                  retryAt <- getCurrentTime
+                  outcomes <- mapConcurrentlyN maxParallelSubmits (postPendingReview retryAt) toRetry
                   let stillFailing = [ p | (p, Left _) <- outcomes ]
                       succeededN   = length outcomes - length stillFailing
                   PendingReviews.savePendingReviews stillFailing
@@ -208,12 +209,12 @@ main = do
                        )
                   pure (Set.fromList (map PendingReviews.prAssignmentId stillFailing))
 
-            postPendingReview p = do
+            postPendingReview retryAt p = do
               r <- tryCreateReview t
                      (PendingReviews.prAssignmentId p)
                      (PendingReviews.prWrongMeaning p)
                      (PendingReviews.prWrongReading p)
-                     (PendingReviews.prCreatedAt p)
+                     (PendingReviews.retryCreatedAt retryAt p)
               pure (p, r)
 
         stillPendingIds <- retryPendingReviews
@@ -273,7 +274,7 @@ main = do
             -- exception, anything not anticipated) would otherwise abort
             -- silently with no record of where it happened.
             submitBatchCore asgToInfo ts subs = do
-              outcomes <- mapConcurrentlyN maxParallelSubmits (postReview ts) subs
+              outcomes <- mapConcurrentlyN maxParallelSubmits postReview subs
               let details   = map (fmtSub asgToInfo) outcomes
                   succeeded = length [() | (_, Right _) <- outcomes]
                   failed    = length outcomes - succeeded
@@ -340,12 +341,17 @@ main = do
                     , Tui.srDetails = details
                     }
 
-            postReview ts s = do
+            -- No 'created_at': the review is happening now, so WaniKani's own
+            -- clock is the right one to stamp it with -- and the only one it
+            -- will not reject as out of range. The batch's 'ts' is still what
+            -- gets persisted if the submission fails, since a retry next run
+            -- does need to say when the answer really happened.
+            postReview s = do
               r <- tryCreateReview t
                      (Tui.subAssignmentId s)
                      (Tui.subWrongMeaning s)
                      (Tui.subWrongReading s)
-                     ts
+                     Nothing
               pure (s, r)
 
         runBatch
@@ -711,7 +717,7 @@ fetchSubjectContext t sms subjects = do
 -- ('postReview') and a resubmit of a previously-failed one
 -- ('postPendingReview'), which differ only in where the four arguments
 -- come from ('Tui.Submission' vs. 'PendingReviews.PendingReview').
-tryCreateReview :: String -> Api.AssignmentId -> Int -> Int -> UTCTime -> IO (Either SomeException Api.ReviewResult)
+tryCreateReview :: String -> Api.AssignmentId -> Int -> Int -> Maybe UTCTime -> IO (Either SomeException Api.ReviewResult)
 tryCreateReview t assignmentId wrongMeaning wrongReading createdAt =
   trySync (Api.createReview t assignmentId wrongMeaning wrongReading createdAt)
 
