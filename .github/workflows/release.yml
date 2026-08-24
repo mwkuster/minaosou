@@ -28,12 +28,27 @@ jobs:
       - name: Cache Cabal store
         uses: actions/cache@v5
         with:
-          path: ~/.cabal
+          # Alpine's cabal 3.10 follows the XDG layout, so the store is here
+          # and not in ~/.cabal -- which this used to cache, always missing.
+          path: |
+            ~/.cache/cabal
+            ~/.local/state/cabal
           key: linux-static-cabal-${{ hashFiles('minaosou.cabal') }}
           restore-keys: linux-static-cabal-
 
       - name: Update Cabal index
-        run: cabal update
+        # Seed Hackage's current TUF root before updating. cabal 3.10
+        # bootstraps the root from keys predating Hackage's rotation to root
+        # version 8 (6 keys, threshold 3) and fails the update outright:
+        #   <repo>/root.json does not have enough signatures signed with the
+        #   appropriate keys
+        # Broke the 1.2.1 release build; the other two jobs get a current
+        # cabal from haskell-actions/setup and were unaffected.
+        run: |
+          root="$HOME/.cache/cabal/packages/hackage.haskell.org/root.json"
+          mkdir -p "$(dirname "$root")"
+          wget -qO "$root" https://hackage.haskell.org/root.json
+          cabal update
 
       - name: Build static binary
         run: |
