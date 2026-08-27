@@ -662,7 +662,10 @@ britishToAmerican = T.unwords . map convertWord . T.words
 normReading :: Text -> Text
 normReading t =
   let t' = T.strip t
-  in if T.all (\c -> (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '\'') t'
+      -- '-' is romaji too: it is how the chōonpu ー is typed ("cha-han").
+      romajiChar c = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                     || c == '\'' || c == '-'
+  in if T.all romajiChar t'
        then Romaji.romajiToHiragana (T.toCaseFold t')
        else T.toCaseFold t'
 

@@ -174,6 +174,10 @@ spec = do
       Tui.normReading "gakkou" `shouldBe` "がっこう"
     it "romaji with apostrophe (n')" $
       Tui.normReading "n'a" `shouldBe` "んあ"
+    -- A hyphen is romaji (the chōonpu ー), so it must not knock the answer
+    -- out of the romaji branch and get compared as literal ASCII.
+    it "romaji with chōonpu (-)" $
+      Tui.normReading "cha-han" `shouldBe` "ちゃーはん"
 
   -- This used to be an 'error' in the NoOverlay branch, guarded only by the
   -- caller. An exception here escapes customMain and skips the end-of-session

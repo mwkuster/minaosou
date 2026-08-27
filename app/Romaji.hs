@@ -15,7 +15,8 @@ import qualified Data.Text as T
 romajiToHiragana :: Text -> Text
 romajiToHiragana = go . T.toLower . T.filter keep
   where
-    keep c = isAsciiLower c || isAsciiUpper c || c == '\''
+    -- '-' is the chōonpu ー ("cha-han" → ちゃーはん)
+    keep c = isAsciiLower c || isAsciiUpper c || c == '\'' || c == '-'
     go t
       | T.null t  = ""
       | otherwise =
@@ -89,6 +90,7 @@ table =
 
   , ("tsu","つ"),("shi","し"),("chi","ち"),("fu","ふ")
   , ("dzu","づ"),("du","づ"),("di","ぢ"),("ji","じ")   -- WK uses 'ji'; di/du are kana alternatives
+  , ("-","ー")   -- chōonpu, the long-vowel mark
   , ("kwi","くぃ"),("kwe","くぇ"),("kwo","くぉ")
   , ("gwi","ぐぃ"),("gwe","ぐぇ"),("gwo","ぐぉ")
 
@@ -136,7 +138,8 @@ romajiToHiraganaLive input =
       (kana, pend)  = liveConvert t
   in kana <> pend
   where
-    keep c = isAsciiLower c || isAsciiUpper c || c == '\''
+    -- '-' is the chōonpu ー ("cha-han" → ちゃーはん)
+    keep c = isAsciiLower c || isAsciiUpper c || c == '\'' || c == '-'
 
 liveConvert :: Text -> (Text, Text)
 liveConvert t

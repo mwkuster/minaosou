@@ -129,6 +129,9 @@ main = hspec $ do
       it "gakkou → がっこう" $ Romaji.romajiToHiragana "gakkou"  `shouldBe` "がっこう"
       it "macchi → まっち"  $ Romaji.romajiToHiragana "macchi"   `shouldBe` "まっち"
       it "chidimaru → ちぢまる"  $ Romaji.romajiToHiragana "chidimaru" `shouldBe` "ちぢまる"
+      -- '-' is the chōonpu ー (炒飯 チャーハン, ラーメン)
+      it "cha-han → ちゃーはん"  $ Romaji.romajiToHiragana "cha-han"   `shouldBe` "ちゃーはん"
+      it "ra-men → らーめん"     $ Romaji.romajiToHiragana "ra-men"    `shouldBe` "らーめん"
 
     describe "case insensitivity" $ do
       it "KA → か" $ Romaji.romajiToHiragana "KA"  `shouldBe` "か"
@@ -165,6 +168,13 @@ main = hspec $ do
     describe "っ (doubled consonant)" $ do
       it "kka → っか" $ Romaji.romajiToHiraganaLive "kka" `shouldBe` "っか"
       it "kk pending" $ Romaji.romajiToHiraganaLive "kk"  `shouldBe` "っk"
+
+    -- '-' is the chōonpu ー. Live, the trailing lone n is still pending as
+    -- everywhere else; it resolves to ん on submission -- see the
+    -- romajiToHiragana "cha-han → ちゃーはん" case above.
+    describe "ー (chōonpu)" $ do
+      it "cha-han → ちゃーはn" $ Romaji.romajiToHiraganaLive "cha-han" `shouldBe` "ちゃーはn"
+      it "ra-me → らーめ"      $ Romaji.romajiToHiraganaLive "ra-me"   `shouldBe` "らーめ"
 
 --------------------------------------------------------------------------------
 -- Config parsing tests
