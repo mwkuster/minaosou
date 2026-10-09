@@ -84,6 +84,7 @@ main = hspec $ do
       it "tsu → つ" $ Romaji.romajiToHiragana "tsu" `shouldBe` "つ"
       it "fu  → ふ" $ Romaji.romajiToHiragana "fu"  `shouldBe` "ふ"
       it "ji  → じ" $ Romaji.romajiToHiragana "ji"  `shouldBe` "じ"
+      it "bu  → ぶ" $ Romaji.romajiToHiragana "bu"  `shouldBe` "ぶ"
       it "dzu → づ" $ Romaji.romajiToHiragana "dzu" `shouldBe` "づ"
 
     describe "palatalized sounds" $ do
