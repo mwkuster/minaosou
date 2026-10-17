@@ -9,6 +9,8 @@ module Tui.State
   , Q(..)
   , Submission(..)
   , SubmitResult(..)
+  , SubmitStep(..)
+  , SubmitProgress(..)
   , AppEvent(..)
   , Progress(..)
   , AppState(..)
@@ -27,6 +29,9 @@ module Tui.State
   , overlayViewport
 
     -- Progress / submissions
+  , startSubmitProgress
+  , applySubmitStep
+  , submitProgressText
   , markOk
   , incWrong
   , mkSubmissions
@@ -120,6 +125,26 @@ data SubmitResult = SubmitResult
   , srDetails :: [String]   -- per-submission lines for TUI display
   } deriving (Show)
 
+-- | Something that happened in a submission running in the background,
+-- reported as it happens so the TUI can show progress rather than a static
+-- "Submitting…" for what can be over a minute: past
+-- 'Api.requestBudgetPerMinute' reviews, the rest wait out WaniKani's rate
+-- limit window.
+data SubmitStep
+  = ReviewPosted          -- ^ one review's POST finished, successfully or not
+  | RateLimited UTCTime   -- ^ requests are being held back until this time
+  deriving (Show, Eq)
+
+data SubmitProgress = SubmitProgress
+  { spDone     :: Int
+  , spTotal    :: Int
+  , spResumeAt :: Maybe UTCTime
+    -- ^ The latest time the rate limiter has said it is holding requests
+    -- until. Left in place after it passes and simply not shown then, so a
+    -- review that was already in flight finishing during the wait can't
+    -- hide the countdown.
+  } deriving (Show, Eq)
+
 -- | Session-wide settings for 'Tui.runStudyTui', grouped into one record so
 -- a new setting doesn't grow the function's positional-argument list
 -- further and similarly-typed flags (several 'Bool's) can't be swapped by
@@ -170,6 +195,7 @@ data AppEvent
   = SubmitDone  (Either SomeException SubmitResult)
   | SynonymDone (Either SomeException Api.StudyMaterial)
   | Tick UTCTime                 -- ^ one-second clock tick for the session timer
+  | SubmitStepped SubmitStep     -- ^ progress of the submission in flight
 
 data AppState = AppState
   { stQueue        :: [Q]
@@ -213,6 +239,7 @@ data AppState = AppState
   , stAudioAutoplay :: Bool                            -- auto-play reading audio on first appearance (config)
   , stAutoplayed    :: S.Set Api.SubjectId             -- subjects already auto-played this session
   , stPracticeOnly  :: Bool                            -- leech practice session: never submitted to WaniKani
+  , stSubmitProgress :: Maybe SubmitProgress           -- set while a submission is in flight
   , stSubmitAttempted :: Bool
     -- ^ The user confirmed a submission and it ran to completion (whether
     -- or not every individual review reached WaniKani -- failures are
@@ -762,6 +789,34 @@ accuracyBand share
   | share >= 0.8 = AccGood
   | share >= 0.6 = AccFair
   | otherwise    = AccPoor
+
+startSubmitProgress :: Int -> SubmitProgress
+startSubmitProgress total = SubmitProgress 0 total Nothing
+
+applySubmitStep :: SubmitStep -> SubmitProgress -> SubmitProgress
+applySubmitStep ReviewPosted p =
+  p { spDone = min (spTotal p) (spDone p + 1) }
+applySubmitStep (RateLimited t) p =
+  p { spResumeAt = Just (maybe t (max t) (spResumeAt p)) }
+
+-- | The banner while a submission runs, e.g.
+-- @Submitting to WaniKani… 50/80 · rate limit, resuming in 42s@. Once every
+-- review is posted, what's left is the status refresh (which can itself be
+-- waiting on the rate limit).
+submitProgressText :: UTCTime -> SubmitProgress -> Text
+submitProgressText now p =
+  T.pack $
+    "Submitting to WaniKani… " <> show (spDone p) <> "/" <> show (spTotal p)
+    <> case waitSecs of
+         Just secs -> " · rate limit, resuming in " <> show secs <> "s"
+         Nothing
+           | spDone p >= spTotal p -> " · refreshing review count"
+           | otherwise             -> ""
+  where
+    waitSecs = do
+      t <- spResumeAt p
+      let secs = ceiling (nominalDiffTimeToSeconds (diffUTCTime t now)) :: Int
+      if secs > 0 then Just secs else Nothing
 
 -- | Charge the time since the last sample to the item that was on screen
 -- while it passed, and move the sample point to @now@. 'Nothing' (no current

@@ -31,7 +31,7 @@ type SynonymSubmit =
 
 handleEvent
   :: IO (UTCTime, Api.Summary)
-  -> ([Submission] -> IO SubmitResult)
+  -> ((SubmitStep -> IO ()) -> [Submission] -> IO SubmitResult)
   -> SynonymSubmit
   -> BrickEvent Name AppEvent
   -> EventM Name AppState ()
@@ -43,6 +43,7 @@ handleEvent _ _ _ (AppEvent (SubmitDone result)) =
       , stError         = Nothing
       , stHasMore       = srHasMore r
       , stSubmitDetails = srDetails r
+      , stSubmitProgress = Nothing
       , stSubmitAttempted = True
       }
     -- Even a wholesale failure counts as attempted: the answers are either
@@ -52,9 +53,12 @@ handleEvent _ _ _ (AppEvent (SubmitDone result)) =
       { stMode  = Finished
       , stBanner = Nothing
       , stError = Just (T.pack ("submit failed: " <> shortErr e))
+      , stSubmitProgress = Nothing
       , stSubmitAttempted = True
       }
 handleEvent _ _ _ (AppEvent (SynonymDone result)) = handleSynonymDone result
+handleEvent _ _ _ (AppEvent (SubmitStepped step)) =
+  modify $ \st -> st { stSubmitProgress = applySubmitStep step <$> stSubmitProgress st }
 handleEvent _ _ _ (AppEvent (Tick now)) =
   modify $ \st -> st { stClock = now }
 handleEvent refreshFn submitFn submitSynonymFn (VtyEvent ev) = do
@@ -283,7 +287,7 @@ handleSynonymDone (Left e) = do
          , stError = Just (T.pack ("synonym add failed: " <> shortErr e))
          }
 
-handleConfirm :: ([Submission] -> IO SubmitResult) -> V.Event -> EventM Name AppState ()
+handleConfirm :: ((SubmitStep -> IO ()) -> [Submission] -> IO SubmitResult) -> V.Event -> EventM Name AppState ()
 handleConfirm submitFn ev =
   case ev of
     V.EvKey (V.KChar 'y') [] -> doSubmit
@@ -306,9 +310,10 @@ handleConfirm submitFn ev =
         { stMode   = Submitting
         , stBanner = Just "Submitting to WaniKani…"
         , stError  = Nothing
+        , stSubmitProgress = Just (startSubmitProgress (length subs))
         }
       void $ liftIO $ forkIO $ do
-        r <- try (submitFn subs)
+        r <- try (submitFn (writeBChan chan . SubmitStepped) subs)
         writeBChan chan (SubmitDone r)
 
 handleFinished :: IO (UTCTime, Api.Summary) -> V.Event -> EventM Name AppState ()

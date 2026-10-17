@@ -34,7 +34,7 @@ runStudyTui
   -> M.Map Api.SubjectId (Int, Int)
   -> [Api.Subject]
   -> IO (UTCTime, Api.Summary)
-  -> ([Submission] -> IO SubmitResult)
+  -> ((SubmitStep -> IO ()) -> [Submission] -> IO SubmitResult)
   -> (Api.SubjectId -> Maybe Api.StudyMaterialId -> [T.Text] -> IO Api.StudyMaterial)
   -> IO (Bool, Maybe [(Api.SubjectId, Int, Int)])
 runStudyTui cfg user summary now tz allSubjects subjToAsg priorWrong subjects refreshFn submitFn submitSynonymFn = do
@@ -82,6 +82,7 @@ runStudyTui cfg user summary now tz allSubjects subjToAsg priorWrong subjects re
         , stAudioAutoplay = scAudioAutoplay cfg
         , stAutoplayed    = S.empty
         , stPracticeOnly  = scPracticeOnly cfg
+        , stSubmitProgress = Nothing
         , stSubmitAttempted = False
         }
 
@@ -105,7 +106,7 @@ withTicker chan =
 
 app
   :: IO (UTCTime, Api.Summary)
-  -> ([Submission] -> IO SubmitResult)
+  -> ((SubmitStep -> IO ()) -> [Submission] -> IO SubmitResult)
   -> (Api.SubjectId -> Maybe Api.StudyMaterialId -> [T.Text] -> IO Api.StudyMaterial)
   -> App AppState AppEvent Name
 app refreshFn submitFn submitSynonymFn = App

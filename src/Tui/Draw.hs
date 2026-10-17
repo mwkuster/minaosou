@@ -109,9 +109,11 @@ drawMain st
                             (str (if stPracticeOnly st then "--- practice recorded ---" else "--- submitted ---")))
                         : map drawSubmitDetail ds
                 bannerWidgets =
-                  case stBanner st of
-                    Just msg -> [padTop (Pad 1) (txt msg)]
-                    Nothing  -> []
+                  case (stMode st, stSubmitProgress st, stBanner st) of
+                    (Submitting, Just p, _) ->
+                      [padTop (Pad 1) (txt (submitProgressText (stClock st) p))]
+                    (_, _, Just msg) -> [padTop (Pad 1) (txt msg)]
+                    _                -> []
                 errorWidgets =
                   case stError st of
                     Just msg -> [padTop (Pad 1) (withAttr (attrName "bad") (wideTxtWrap msg))]

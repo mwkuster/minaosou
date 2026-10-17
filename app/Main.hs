@@ -99,7 +99,7 @@ main = do
                         now'     <- getCurrentTime
                         summary' <- Api.getSummary t
                         pure (now', summary')
-                      submitPractice subs =
+                      submitPractice _ subs =
                         pure Tui.SubmitResult
                           { Tui.srMessage = "Practice recorded locally (not submitted to WaniKani)."
                           , Tui.srHasMore = not (null restIds)
@@ -273,8 +273,8 @@ main = do
             -- so any other exception type (a bug, an unexpected library
             -- exception, anything not anticipated) would otherwise abort
             -- silently with no record of where it happened.
-            submitBatchCore asgToInfo ts subs = do
-              outcomes <- mapConcurrentlyN maxParallelSubmits postReview subs
+            submitBatchCore asgToInfo report ts subs = do
+              outcomes <- mapConcurrentlyN maxParallelSubmits (postReview report) subs
               let details   = map (fmtSub asgToInfo) outcomes
                   succeeded = length [() | (_, Right _) <- outcomes]
                   failed    = length outcomes - succeeded
@@ -304,9 +304,16 @@ main = do
                   PendingReviews.savePendingReviews (PendingReviews.addPending existingPending genuinelyFailed)
               pure (details, submitMsg)
 
-            submitBatch asgToInfo subs = do
+            -- Everything in here, the trailing status refresh included, can be
+            -- held back by the rate limiter; pass that on so the TUI can
+            -- count down instead of looking hung.
+            submitBatch asgToInfo report subs =
+              Api.withThrottleListener (report . Tui.RateLimited) $
+                submitBatchReporting asgToInfo report subs
+
+            submitBatchReporting asgToInfo report subs = do
               ts <- getCurrentTime
-              coreResult <- try (submitBatchCore asgToInfo ts subs)
+              coreResult <- try (submitBatchCore asgToInfo report ts subs)
                               :: IO (Either SomeException ([String], String))
               case coreResult of
                 Left e ->
@@ -346,12 +353,13 @@ main = do
             -- will not reject as out of range. The batch's 'ts' is still what
             -- gets persisted if the submission fails, since a retry next run
             -- does need to say when the answer really happened.
-            postReview s = do
+            postReview report s = do
               r <- tryCreateReview t
                      (Tui.subAssignmentId s)
                      (Tui.subWrongMeaning s)
                      (Tui.subWrongReading s)
                      Nothing
+              report Tui.ReviewPosted :: IO ()
               pure (s, r)
 
         runBatch

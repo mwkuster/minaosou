@@ -89,6 +89,10 @@ the time it was really answered, because WaniKani schedules the next review from
 sent when it is older than `clockSkewMargin` (60s) — a timestamp barely in the
 past is more likely a fast clock than a real answer time.
 
+### Submission progress and the rate limit
+
+WaniKani has no bulk review endpoint, so a batch is one POST per item through `Api.runApi`'s sliding-window limiter (`requestBudgetPerMinute` = 50). Past the budget, every remaining request waits for the oldest to age out of the window, so submit time is a **staircase** — about one minute per 50 items, not proportional — and no client-side tuning can beat WaniKani's 60/min for a burst. To keep that wait from looking like a hang, the submit callback gets a `SubmitStep -> IO ()` reporter: `Main.postReview` reports `ReviewPosted` per finished POST, and `Api.withThrottleListener` (wrapped around the whole of `submitBatch`, status refresh included) reports `RateLimited resumeAt` whenever the limiter holds a request. `Tui.State.submitProgressText` renders `Submitting to WaniKani… 50/80 · rate limit, resuming in 42s`, counted down by the existing `Tick`. `spResumeAt` keeps the latest time and is never cleared, only hidden once past, so a review that was already in flight finishing during the wait doesn't hide the countdown.
+
 ### Forecasting (`Srs.hs`, `minaosou forecast`)
 
 `visitsPerStage` computes the expected number of reviews an item spends at each stage before burning; everything else (reviews/day, days to burn, pool sizes) is bookkeeping on top of it. The recursion is forward, not a linear solve: `W s` (visits accumulated climbing s → s+1) only references stages below `s`, because a miss never moves an item forwards.

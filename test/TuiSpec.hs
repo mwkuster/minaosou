@@ -8,7 +8,7 @@ import qualified Data.Set as S
 import qualified Data.Text as T
 import qualified Data.Vector as Vec
 import qualified Brick.Widgets.List as L
-import Data.Time (UTCTime(..), fromGregorian, secondsToDiffTime)
+import Data.Time (UTCTime(..), addUTCTime, fromGregorian, secondsToDiffTime)
 import Data.Time.LocalTime (utc)
 
 import qualified Api
@@ -127,6 +127,7 @@ stateWith prog subjToAsg = Tui.AppState
   , Tui.stAudioAutoplay = False
   , Tui.stAutoplayed    = S.empty
   , Tui.stPracticeOnly  = False
+  , Tui.stSubmitProgress = Nothing
   , Tui.stSubmitAttempted = True
   }
 
@@ -558,6 +559,47 @@ spec = do
 
     it "carries the minute rather than rounding to :60" $
       Tui.formatAvgPerItem 119.7 1 `shouldBe` Just "2:00"
+
+  describe "submit progress" $ do
+    let t0 = UTCTime (fromGregorian 2026 10 16) (secondsToDiffTime 43200)
+        at secs = addUTCTime (fromIntegral (secs :: Int)) t0
+        stepAll = foldl (flip Tui.applySubmitStep)
+
+    it "counts posted reviews" $
+      Tui.submitProgressText t0
+        (stepAll (Tui.startSubmitProgress 80) (replicate 30 Tui.ReviewPosted))
+        `shouldBe` "Submitting to WaniKani… 30/80"
+
+    it "never counts past the total" $
+      Tui.spDone (stepAll (Tui.startSubmitProgress 2) (replicate 3 Tui.ReviewPosted))
+        `shouldBe` 2
+
+    it "counts down while rate limited, rounding up" $
+      Tui.submitProgressText (at 17)
+        (stepAll (Tui.startSubmitProgress 80)
+          (replicate 50 Tui.ReviewPosted ++ [Tui.RateLimited (addUTCTime 0.5 (at 59))]))
+        `shouldBe` "Submitting to WaniKani… 50/80 · rate limit, resuming in 43s"
+
+    it "keeps the countdown when an in-flight review finishes during the wait" $
+      Tui.submitProgressText (at 10)
+        (stepAll (Tui.startSubmitProgress 80)
+          [Tui.RateLimited (at 60), Tui.ReviewPosted])
+        `shouldBe` "Submitting to WaniKani… 1/80 · rate limit, resuming in 50s"
+
+    it "keeps the latest resume time when held requests report out of order" $
+      Tui.spResumeAt
+        (stepAll (Tui.startSubmitProgress 80) [Tui.RateLimited (at 60), Tui.RateLimited (at 59)])
+        `shouldBe` Just (at 60)
+
+    it "drops the countdown once the wait is over" $
+      Tui.submitProgressText (at 61)
+        (stepAll (Tui.startSubmitProgress 80) [Tui.RateLimited (at 60)])
+        `shouldBe` "Submitting to WaniKani… 0/80"
+
+    it "says what it is doing after the last review" $
+      Tui.submitProgressText t0
+        (stepAll (Tui.startSubmitProgress 2) (replicate 2 Tui.ReviewPosted))
+        `shouldBe` "Submitting to WaniKani… 2/2 · refreshing review count"
 
   describe "formatAccuracy" $ do
     it "is Nothing with no items" $

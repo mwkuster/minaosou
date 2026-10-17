@@ -19,6 +19,7 @@ module Api
 
   , requestBudgetPerMinute
   , admitRequest
+  , withThrottleListener
 
   , SrsStage(..)
   , srsStageLabel
@@ -67,7 +68,8 @@ import qualified Network.HTTP.Client as HC
 import Network.HTTP.Types (status429, status500, status502, status503, status504)
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (MVar, newMVar, modifyMVar)
-import Control.Exception (SomeException, fromException)
+import Control.Exception (SomeException, bracket, fromException)
+import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Control.Retry (RetryPolicyM, RetryStatus, capDelay, exponentialBackoff, limitRetries)
 import System.IO.Unsafe (unsafePerformIO)
 import Text.URI (mkURI)
@@ -183,6 +185,25 @@ admitRequest budget now sent
 sentRequests :: MVar [UTCTime]
 sentRequests = unsafePerformIO (newMVar [])
 
+-- | Told when the limiter starts holding a request back, and until when.
+-- Once a batch outgrows the budget, every further request waits for the
+-- oldest one to age out of the window -- up to a minute of no visible
+-- progress -- so whoever is showing the user that batch wants to know.
+-- Process-global for the same reason 'sentRequests' is.
+{-# NOINLINE throttleListener #-}
+throttleListener :: IORef (UTCTime -> IO ())
+throttleListener = unsafePerformIO (newIORef (const (pure ())))
+
+-- | Run an action with @onHold@ called, with the time the request will be
+-- let through, each time a request inside it is held back by the limiter.
+-- The previous listener is restored afterwards.
+withThrottleListener :: (UTCTime -> IO ()) -> IO a -> IO a
+withThrottleListener onHold act =
+  bracket
+    (atomicModifyIORef' throttleListener (\old -> (onHold, old)))
+    (writeIORef throttleListener)
+    (const act)
+
 -- | Block until this request fits inside the budget.
 awaitRequestSlot :: IO ()
 awaitRequestSlot = do
@@ -190,10 +211,12 @@ awaitRequestSlot = do
     now <- getCurrentTime
     pure $ case admitRequest requestBudgetPerMinute now sent of
       Right window -> (window, Nothing)
-      Left wait    -> (sent,   Just wait)
+      Left wait    -> (sent,   Just (wait, addUTCTime wait now))
   case decision of
     Nothing   -> pure ()
-    Just wait -> do
+    Just (wait, resumeAt) -> do
+      onHold <- readIORef throttleListener
+      onHold resumeAt
       -- Round up, and always sleep a little, so a near-zero wait can't spin.
       threadDelay (max 10000 (ceiling (realToFrac wait * 1e6 :: Double)))
       awaitRequestSlot
