@@ -62,7 +62,13 @@ jobs:
 
   build-macos-arm64:
     name: macOS (arm64)
-    runs-on: macos-latest
+    # Pinned, not macos-latest: the macos-26 image of 2026-10-13 ships a
+    # MacOSX27.0 SDK in its Command Line Tools whose .tbd stubs the linker
+    # rejects ("tapi error: malformed file ... unknown architecture"), so
+    # every dependency failed to link and 1.2.4 went out without a macOS
+    # binary. Move back to macos-latest once a workflow_dispatch run there
+    # links again.
+    runs-on: macos-15
     permissions:
       contents: write
     steps:
@@ -97,6 +103,16 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           files: minaosou-macos-arm64
+
+      # A manual run publishes nothing, but keep its binary: it is how a
+      # release whose macOS job failed gets its binary after the fact
+      # (gh run download, then gh release upload).
+      - name: Keep binary from a manual run
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: minaosou-macos-arm64
+          path: minaosou-macos-arm64
 
   build-windows-x86_64:
     name: Windows (x86-64)
