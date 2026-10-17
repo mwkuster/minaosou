@@ -1,6 +1,10 @@
 # Revision history for minaosou
 
-## Unreleased
+## 1.2.4 -- 2026-10-17
+
+* **Submitting a large batch shows its progress.** WaniKani accepts one review per request and at most 60 requests a minute, so a batch of more than about 50 reviews has to stop and wait out the rate limit -- up to a minute per further 50 -- while the screen showed nothing but `Submitting to WaniKani…`, looking hung. The banner now counts the reviews sent (`50/80`) and, while the rate limit is holding them back, counts down to when sending resumes (`rate limit, resuming in 42s`). The wait itself is WaniKani's and is unchanged.
+
+## 1.2.3 -- 2026-10-09
 
 * **A hyphen in a romaji reading is the long-vowel mark ー.** Typing `cha-han` now gives ちゃーはん, live and on submission. Previously the `-` was dropped before conversion, and -- worse -- an answer containing one was not treated as romaji at all, so it was compared as the literal ASCII string and marked wrong with no way to type the reading correctly.
 
