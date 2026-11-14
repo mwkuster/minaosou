@@ -134,6 +134,26 @@ main = hspec $ do
       -- '-' is the chōonpu ー (炒飯 チャーハン, ラーメン)
       it "cha-han → ちゃーはん"  $ Romaji.romajiToHiragana "cha-han"   `shouldBe` "ちゃーはん"
       it "ra-men → らーめん"     $ Romaji.romajiToHiragana "ra-men"    `shouldBe` "らーめん"
+      it "efferutou → えっふぇるとう" $ Romaji.romajiToHiragana "efferutou" `shouldBe` "えっふぇるとう"
+
+    -- wanakana spellings; 'ti'/'tu' are ち/つ, like 'di'/'du'
+    describe "extended kana (loanwords)" $ do
+      it "fa fi fe fo → ふぁふぃふぇふぉ" $ Romaji.romajiToHiragana "fafifefo" `shouldBe` "ふぁふぃふぇふぉ"
+      it "fyu → ふゅ"   $ Romaji.romajiToHiragana "fyu"     `shouldBe` "ふゅ"
+      it "she → しぇ"   $ Romaji.romajiToHiragana "she"     `shouldBe` "しぇ"
+      it "che → ちぇ"   $ Romaji.romajiToHiragana "che"     `shouldBe` "ちぇ"
+      it "je → じぇ"    $ Romaji.romajiToHiragana "je"      `shouldBe` "じぇ"
+      it "thi → てぃ"   $ Romaji.romajiToHiragana "thi"     `shouldBe` "てぃ"
+      it "dhi → でぃ"   $ Romaji.romajiToHiragana "dhi"     `shouldBe` "でぃ"
+      it "twu → とぅ"   $ Romaji.romajiToHiragana "twu"     `shouldBe` "とぅ"
+      it "dwu → どぅ"   $ Romaji.romajiToHiragana "dwu"     `shouldBe` "どぅ"
+      it "ti → ち"      $ Romaji.romajiToHiragana "ti"      `shouldBe` "ち"
+      it "tu → つ"      $ Romaji.romajiToHiragana "tu"      `shouldBe` "つ"
+      it "wi we → うぃうぇ" $ Romaji.romajiToHiragana "wiwe" `shouldBe` "うぃうぇ"
+      it "va vi vu ve vo → ゔぁゔぃゔゔぇゔぉ" $ Romaji.romajiToHiragana "vavivuvevo" `shouldBe` "ゔぁゔぃゔゔぇゔぉ"
+      it "paathi- → ぱあてぃー" $ Romaji.romajiToHiragana "paathi-" `shouldBe` "ぱあてぃー"
+      it "cheekku → ちぇえっく" $ Romaji.romajiToHiragana "cheekku" `shouldBe` "ちぇえっく"
+      it "vv doubles → っゔぁ" $ Romaji.romajiToHiragana "vva" `shouldBe` "っゔぁ"
 
     describe "case insensitivity" $ do
       it "KA → か" $ Romaji.romajiToHiragana "KA"  `shouldBe` "か"
@@ -149,6 +169,9 @@ main = hspec $ do
       it "k stays pending"  $ Romaji.romajiToHiraganaLive "k"  `shouldBe` "k"
       it "sh stays pending" $ Romaji.romajiToHiraganaLive "sh" `shouldBe` "sh"
       it "n stays pending"  $ Romaji.romajiToHiraganaLive "n"  `shouldBe` "n"
+      it "th stays pending" $ Romaji.romajiToHiraganaLive "th" `shouldBe` "th"
+      it "tw stays pending" $ Romaji.romajiToHiraganaLive "tw" `shouldBe` "tw"
+      it "effe → えっふぇ" $ Romaji.romajiToHiraganaLive "effe" `shouldBe` "えっふぇ"
 
     describe "mixed converted + pending" $ do
       it "kak → か + k pending" $ Romaji.romajiToHiraganaLive "kak"  `shouldBe` "かk"

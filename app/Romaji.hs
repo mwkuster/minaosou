@@ -94,6 +94,16 @@ table =
   , ("kwi","くぃ"),("kwe","くぇ"),("kwo","くぉ")
   , ("gwi","ぐぃ"),("gwe","ぐぇ"),("gwo","ぐぉ")
 
+  -- Extended kana for loanwords, spelled the way wanakana (and so WaniKani)
+  -- spells them. 'ti'/'tu' stay ち/つ like 'di'/'du' above, so ティ/ディ
+  -- are 'thi'/'dhi' and トゥ/ドゥ are 'twu'/'dwu'.
+  , ("fyu","ふゅ")
+  , ("thi","てぃ"),("dhi","でぃ"),("twu","とぅ"),("dwu","どぅ")
+  , ("she","しぇ"),("che","ちぇ"),("je","じぇ")
+  , ("fa","ふぁ"),("fi","ふぃ"),("fe","ふぇ"),("fo","ふぉ")
+  , ("ti","ち"),("tu","つ")
+  , ("wi","うぃ"),("we","うぇ")
+  , ("va","ゔぁ"),("vi","ゔぃ"),("vu","ゔ"),("ve","ゔぇ"),("vo","ゔぉ")
   ]
   ++ basicRows
 
