@@ -1,5 +1,9 @@
 # Revision history for minaosou
 
+## 1.2.5 -- 2026-11-20
+
+* **Loanword readings can be typed in romaji.** Readings with the small-vowel kana of katakana-style words had no romaji spelling, and the unmatched letter was silently dropped: `efferutou` came out as えっえるとう instead of えっふぇるとう, so the right answer was marked wrong. Romaji input now covers `fa`/`fi`/`fe`/`fo`/`fyu`, `she`/`che`/`je`, `thi`/`dhi` (てぃ/でぃ), `twu`/`dwu` (とぅ/どぅ), `wi`/`we` and the `v` row (ゔ), spelled the way WaniKani's own input spells them. `ti` and `tu` give ち and つ, as `di` and `du` already gave ぢ and づ.
+
 ## 1.2.4 -- 2026-10-17
 
 * **Submitting a large batch shows its progress.** WaniKani accepts one review per request and at most 60 requests a minute, so a batch of more than about 50 reviews has to stop and wait out the rate limit -- up to a minute per further 50 -- while the screen showed nothing but `Submitting to WaniKani…`, looking hung. The banner now counts the reviews sent (`50/80`) and, while the rate limit is holding them back, counts down to when sending resumes (`rate limit, resuming in 42s`). The wait itself is WaniKani's and is unchanged.
